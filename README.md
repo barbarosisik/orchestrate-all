@@ -66,8 +66,8 @@ orchestrating, and no model can talk its way past a rule.
  │  integrity + scope checks · merge queue · engine adapters · store│
  └─────────┬───────────────────────┬───────────────────────┬────────┘
            ▼                       ▼                       ▼
-       claude -p              codex exec              gemini CLI
-   (your Claude plan)     (your ChatGPT plan)   (your Google account)
+       claude -p              codex exec             Google lane
+   (your Claude plan)     (your ChatGPT plan)   (to be decided, see research)
 ```
 
 **Why a daemon plus a thin shim?** An MCP server started by a chat dies with that chat, and each front door starts
@@ -121,8 +121,9 @@ own approval.
   elsewhere on disk. Shell access for Claude workers is off by default.
 - **The approval dialog stops models, not malware.** Any program running as your Windows user could in principle
   click it. It exists so that no model can approve its own work.
-- **Antigravity isn't a worker yet.** Google's Antigravity extension has no scriptable entry point that we've found,
-  so Gemini tasks go through the Gemini CLI. Antigravity may become a front door later through its MCP support.
+- **The Google lane is undecided.** The Gemini CLI no longer serves Google AI Pro/Ultra plans, and Google's terms say
+  wrapping the Antigravity CLI in a third-party app isn't supported on consumer plans. The options are laid out in
+  [docs/research.md](docs/research.md#3-vendor-terms-may-orchestra-drive-each-cli-on-your-subscription).
 
 ## Roadmap
 
@@ -132,6 +133,13 @@ own approval.
 | **1. Conductor and front doors** | Plan validator, worktree manager, integrity and scope checks, merge plumbing, finalize checks, run store, engine adapters, daemon, approval dialog, MCP shim, `/orchestrate-all` skill, registration in Claude Code and Codex. Built test-first. |
 | **2. Live dashboard** | A read-only localhost page, opened as a VS Code tab, with per-worker lanes, streaming logs, status, time, tokens and diffs. |
 | **3. Control and compare** | Re-route tasks in the UI, pick the orchestrator, and send one brief to several models to compare their answers side by side and keep one. |
+
+## Research
+
+[docs/research.md](docs/research.md) collects the research behind the design: how each engine runs as a locked-down
+headless worker, how each loads project rules (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`), how to plan and prompt the
+orchestrator and workers, what each vendor's terms allow, and how existing tools compare. The detailed notes, with
+every source, are in [docs/research/](docs/research/).
 
 ## Planned stack (not final)
 
