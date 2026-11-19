@@ -3,8 +3,9 @@
 **Orchestra**: describe a coding task once. An AI orchestrator splits it across Claude Code, Codex and Gemini
 workers, and a plain-code conductor makes sure they never clash.
 
-> **Status: design phase (Phase 0). There is no product code yet.** Everything below describes the plan, not working
-> software. Facts about vendor CLIs are still being verified.
+> **Status: early build (Phase 1, step 1 of 15).** Only the plan validator exists so far; nothing runs agents yet.
+> Everything else below describes the plan. Facts about vendor CLIs are still being verified. Progress is tracked
+> in [docs/PLAN.md](docs/PLAN.md).
 
 ---
 
@@ -131,8 +132,8 @@ own approval.
 
 | Phase | Scope |
 |---|---|
-| **0. Verify and plan** *(current)* | Confirm each CLI's flags, event formats, sandboxing and approval behaviour with tiny real runs in throwaway repos. Test the approval dialog. Write the planning docs. No product code. |
-| **1. Conductor and front doors** | Plan validator, worktree manager, integrity and scope checks, merge plumbing, finalize checks, run store, engine adapters, daemon, approval dialog, MCP shim, `/orchestrate-all` skill, registration in Claude Code and Codex. Built test-first. |
+| **0. Verify and plan** *(research done; checks on your PC still to do)* | Confirm each CLI's flags, event formats, sandboxing and approval behaviour with tiny real runs in throwaway repos. Test the approval dialog. Write the planning docs. No product code. |
+| **1. Conductor and front doors** *(started)* | Plan validator, worktree manager, integrity and scope checks, merge plumbing, finalize checks, run store, engine adapters, daemon, approval dialog, MCP shim, `/orchestrate-all` skill, registration in Claude Code and Codex. Built test-first. |
 | **2. Live dashboard** | A read-only localhost page, opened as a VS Code tab, with per-worker lanes, streaming logs, status, time, tokens and diffs. |
 | **3. Control and compare** | Re-route tasks in the UI, pick the orchestrator, and send one brief to several models to compare their answers side by side and keep one. |
 
@@ -149,6 +150,17 @@ every source, are in [docs/research/](docs/research/).
 - `@modelcontextprotocol/sdk`, `zod` for all input validation, `vitest` for tests
 - Plain `git` through `child_process.spawn` (`shell: false`, arguments as arrays)
 - Windows 11 is the first target platform
+
+## Development
+
+Needs Node 22 or newer. Tests run on Windows and Linux in GitHub Actions.
+
+```bash
+npm ci
+npm test
+npm run typecheck
+npm run coverage
+```
 
 ## Glossary
 
