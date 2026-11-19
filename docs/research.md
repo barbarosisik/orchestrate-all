@@ -46,7 +46,7 @@ Section 2 maps every finding to the part of Orchestra that needs it.
 1. **The Google lane doesn't work as designed** (section 3).
    - The Gemini CLI stopped serving Google AI Pro/Ultra and free accounts on 2026-06-18.
    - The official headless tool for your plan is now the Antigravity CLI (`agy -p`). Google's FAQ says wrapping it "inside third-party coding agents or applications … is not supported under consumer plans". Its terms call third-party access "a breach" that "may be grounds for suspension".
-   - **This needs your decision.**
+   - **Decided (2026-11-19): the Google lane uses a Gemini API key, driven through `agy`** (section 3).
 2. **The Claude and Codex lanes are fine on your own logins.**
    - Anthropic's terms explicitly allow "an end user … signing in to the unmodified Claude Code binary with their own Claude subscription".
    - OpenAI documents that "`codex exec` reuses saved CLI authentication by default".
@@ -114,8 +114,8 @@ Section 2 maps every finding to the part of Orchestra that needs it.
 
 | Option | How it works | Trade-off |
 |---|---|---|
-| **a. Manual Antigravity lane** (recommended default) | The conductor prepares the worktree and brief. You run the task yourself in Antigravity, which can open the prepared folder. The conductor then checks the diff and merges as usual. | No automation of your Google account. Slower, because you click. All of Orchestra's checks still apply. |
-| b. API-key lane | `agy` or the Gemini CLI with a Google AI Studio or Gemini Enterprise API key, which is Google's own recommendation for third-party agents. | Pay-per-use. This breaks R3 ("each engine bills its own subscription") unless you opt in. |
+| a. Manual Antigravity lane (ruled out) | The conductor prepares the worktree and brief. You run the task yourself in Antigravity, which can open the prepared folder. The conductor then checks the diff and merges as usual. | Ruled out: you won't run tasks by hand. |
+| **b. API-key lane (chosen)** | `agy` with a Google AI Studio API key, which is Google's own recommendation for third-party agents. `agy` sends requests to the Gemini API when `modelProvider` is `"gemini"` and `GEMINI_API_KEY` is set. Neon is on the API as `gemini-4-neon`, paid tier only: $3 input and $15 output (thinking included) per 1M tokens. | Pay-per-use, outside your Google AI plan: a deliberate exception to R3. Set a project spend cap in AI Studio. |
 | c. Gemini CLI with a Code Assist licence | The supported headless route for Gemini Code Assist Standard/Enterprise users. | Needs that licence. |
 | d. Drive `agy -p` on your consumer plan | Technically documented and easy. | Risks your Google account. Not recommended. |
 
@@ -239,7 +239,7 @@ Your position: Orchestra adds no coding rules of its own. Each project's own fil
 
 ### 5.0 Side by side
 
-| | Claude Code `claude -p` | Codex `codex exec` | Antigravity `agy -p` (only if D1 allows) |
+| | Claude Code `claude -p` | Codex `codex exec` | Antigravity `agy -p` (API-key mode) |
 |---|---|---|---|
 | **Prompt** | stdin | stdin via `-` (and close stdin) | stdin with `--input-format stream-json` |
 | **Live events** | `--output-format stream-json --verbose` (`--verbose` is required) | `--json` (JSONL) | `--output-format stream-json` |
@@ -249,8 +249,8 @@ Your position: Orchestra adds no coding rules of its own. Each project's own fil
 | **OS sandbox on native Windows** | **None**: "On native Windows, Claude Code runs commands unsandboxed" | MXC (Win11 24H2 ≥ 26100.9278), with older fallbacks | AppContainer (Win11 24H2 + Aug 2026 update) |
 | **MCP off** | `--strict-mcp-config` | `--ignore-user-config` (plus no `--trust`) | `mcp(*)` deny rule |
 | **Sub-agents off** | `--disallowedTools Agent` | `-c agents.enabled=false` (on by default!) | Deny `invoke_subagent` in a hook |
-| **Billing env vars to strip** | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_PROFILE`, `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY/ANTHROPIC_AWS` | `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` (and `OPENAI_API_KEY` to be safe) | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_*`, `GOOGLE_APPLICATION_CREDENTIALS` |
-| **Login check (no credential files)** | `claude auth status` → `authMethod: "claude.ai"`, and init event `apiKeySource: "none"` | `codex login status` → stderr "Logged in using ChatGPT" (ignores env vars, so check those separately) | `agy -p "/usage" --output-format json` (spends no quota) |
+| **Billing env vars to strip** | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_PROFILE`, `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY/ANTHROPIC_AWS` | `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` (and `OPENAI_API_KEY` to be safe) | Pass `GEMINI_API_KEY` on purpose (Google workers only). Strip `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_*`, `GOOGLE_APPLICATION_CREDENTIALS` |
+| **Login check (no credential files)** | `claude auth status` → `authMethod: "claude.ai"`, and init event `apiKeySource: "none"` | `codex login status` → stderr "Logged in using ChatGPT" (ignores env vars, so check those separately) | Confirm API-key mode is active and refuse to fall back to your Google login (`/usage` exits 2 under an API key) |
 | **Never use** | `--bare` (API key only), `bypassPermissions`, `acceptEdits` alone | `--yolo`, `--trust`, `forced_login_method` (logs you out on a mismatch) | `--dangerously-skip-permissions` |
 
 **In every engine, the conductor's diff check after the run is the final authority.** Shell commands, scripts and the missing Windows sandbox for Claude mean no worker-side setting fully stops file changes.
@@ -584,7 +584,7 @@ A worktree alone is **not** a security boundary.
 
 | # | Decision | Options (recommendation first) |
 |---|---|---|
-| **D1** | Google lane | **a. Manual Antigravity lane**; b. API key (opt out of R3); c. Gemini CLI with a Code Assist licence; d. drive `agy` on your consumer plan (against Google's policy) |
+| **D1** | Google lane | **Decided: b. Gemini API key, driven through `agy`.** No Code Assist licence; manual lane ruled out. Set a project spend cap in AI Studio. |
 | **D2** | Even split | **Hard rule (±1 per engine; never invent tasks; rotate who sits out)**, or soft rule (orchestrator may justify a deviation that you approve). Also: does a manual Google lane count in the split? |
 | **D3** | Replanning | **Re-approval needed whenever ownership widens or tasks are added**, or the orchestrator may replan alone within the approved file set |
 | **D4** | Claude CLI version | **Upgrade the CLI to ≥ 2.1.325** (matches your extension; fixes the history-deletion, Windows path-rule and hook fail-open bugs; adds AGENTS.md), or call the extension's bundled binary, or stay on 2.1.97 with workarounds |
@@ -615,7 +615,7 @@ A worktree alone is **not** a security boundary.
 10. Does `--strict-config` reject a misspelled `-c` key? How do parallel `codex exec` runs behave on one `~/.codex`?
 
 **Google** (depends on D1)
-11. Is `agy.exe` present and signed in? Check with `agy -p "/usage" --output-format json`, which spends no quota. Which plan do you have? Neon needs paid Pro or Ultra.
+11. Is `agy.exe` present? Does it run in API-key mode (`modelProvider: "gemini"` plus `GEMINI_API_KEY`) and never fall back to your Google login? Is `gemini-4-neon` selectable in that mode, or does it need a `customModelsConfig` entry?
 12. Does any personal global `~/.gemini/GEMINI.md`, `AGENTS.md`, rules or MCP config exist that would reach workers?
 
 **Orchestra itself**

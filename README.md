@@ -66,8 +66,8 @@ orchestrating, and no model can talk its way past a rule.
  │  integrity + scope checks · merge queue · engine adapters · store│
  └─────────┬───────────────────────┬───────────────────────┬────────┘
            ▼                       ▼                       ▼
-       claude -p              codex exec             Google lane
-   (your Claude plan)     (your ChatGPT plan)   (to be decided, see research)
+       claude -p              codex exec               agy -p
+   (your Claude plan)     (your ChatGPT plan)   (your Gemini API key)
 ```
 
 **Why a daemon plus a thin shim?** An MCP server started by a chat dies with that chat, and each front door starts
@@ -121,8 +121,10 @@ own approval.
   elsewhere on disk. Shell access for Claude workers is off by default.
 - **The approval dialog stops models, not malware.** Any program running as your Windows user could in principle
   click it. It exists so that no model can approve its own work.
-- **The Google lane is undecided.** The Gemini CLI no longer serves Google AI Pro/Ultra plans, and Google's terms say
-  wrapping the Antigravity CLI in a third-party app isn't supported on consumer plans. The options are laid out in
+- **Google work runs on a Gemini API key, not a Google subscription.** The Gemini CLI no longer serves Google AI
+  Pro/Ultra plans, and Google's terms say wrapping the Antigravity CLI in a third-party app isn't supported on
+  consumer plans. So Google's share of tasks runs through the Antigravity CLI with your own Gemini API key, billed per
+  use. Details are in
   [docs/research.md](docs/research.md#3-vendor-terms-may-orchestra-drive-each-cli-on-your-subscription).
 
 ## Roadmap
