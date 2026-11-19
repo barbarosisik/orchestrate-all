@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1 started (2026-11-19). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–2 done; step 3 next (2026-11-19). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -60,8 +60,8 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 
 | # | Step | Where | Status |
 |---|---|---|---|
-| 1 | Plan schema + validator: ids, paths, normalization, overlap, reserved files, dependencies, engines, even split; plus the plan hash | ☁ | **in progress** |
-| 2 | Repo checks: allowlist, target branch, base commit, dirty owned paths | ☁ | |
+| 1 | Plan schema + validator: ids, paths, normalization, overlap, reserved files, dependencies, engines, even split; plus the plan hash | ☁ | done |
+| 2 | Repo checks: allowlist, target branch, base commit, dirty owned paths | ☁ | done |
 | 3 | Worktree manager with explicit git-dir and hardened git calls | ☁ | |
 | 4 | Integrity checks (`.git` pointer, refs, `HEAD`, nested git metadata) | ☁ | |
 | 5 | Scope checker (`-z`, `--no-renames`, ignored files, post-commit re-check) | ☁ | |

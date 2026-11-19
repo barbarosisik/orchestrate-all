@@ -43,7 +43,16 @@ export type ValidationErrorCode =
   | 'engine-not-ready'
   | 'uneven-split'
   | 'overlap-unordered'
-  | 'overlap-strict';
+  | 'overlap-strict'
+  // Repository checks (src/repo/checks.ts)
+  | 'repo-missing'
+  | 'repo-not-allowed'
+  | 'not-a-git-repo'
+  | 'bare-repo'
+  | 'repo-not-toplevel'
+  | 'branch-missing'
+  | 'dirty-owned'
+  | 'git-failed';
 
 export interface ValidationError {
   /** Where the problem is, e.g. "tasks[1].owns[0]". */
