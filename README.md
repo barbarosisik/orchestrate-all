@@ -1,6 +1,10 @@
 # orchestrate-all
 
-**Orchestra**: describe a coding task once. An AI orchestrator splits it across Claude Code, Codex and Gemini
+<p align="center">
+  <img src="docs/assets/hero.svg" width="100%" alt="Animated terminal: /orchestrate-all splits a task across Claude Code, Codex and Antigravity, progress bars fill, a clashing edit is blocked, and the result waits for approval">
+</p>
+
+**Orchestra**: describe a coding task once. An AI orchestrator splits it across Claude Code, Codex and Antigravity
 workers, and a plain-code conductor makes sure they never clash.
 
 > **Status: early build (Phase 1, step 1 of 15).** Only the plan validator exists so far; nothing runs agents yet.
