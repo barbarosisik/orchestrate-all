@@ -78,7 +78,7 @@ orchestrating, and no model can talk its way past a rule.
 **Why a daemon plus a thin shim?** An MCP server started by a chat dies with that chat, and each front door starts
 its own copy. One long-lived local daemon gives a single source of truth, so a run started from Claude Code is visible
 from Codex and, later, from the dashboard. The daemon listens on loopback only, requires a random token on every
-request, and refuses any repository that isn't on its allowlist.
+request.
 
 ## A run, step by step
 
@@ -117,7 +117,7 @@ own approval.
 - Open, copy or log credential files or API keys.
 - Drive VS Code extension UIs or reverse-engineer any vendor's private interfaces.
 - Automatically resolve a conflict or "fix up" an out-of-scope change.
-- Touch a repository that isn't on its allowlist.
+- Work outside the project you started it in.
 
 ## Honest limits
 

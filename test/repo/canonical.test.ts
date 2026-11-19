@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { canonicalPath, isAllowedRepo, samePath } from '../../src/repo/canonical.js';
+import { canonicalPath, samePath } from '../../src/repo/canonical.js';
 
 const root = mkdtempSync(join(tmpdir(), 'orch-canon-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -38,29 +38,3 @@ describe('samePath', () => {
   });
 });
 
-describe('isAllowedRepo', () => {
-  const allowed = join(root, 'allowed');
-  mkdirSync(allowed);
-
-  it('accepts a listed repo', () => {
-    expect(isAllowedRepo(allowed, [allowed])).toBe(true);
-  });
-
-  it('accepts a listed repo written with a trailing separator', () => {
-    expect(isAllowedRepo(allowed, [`${allowed}/`])).toBe(true);
-  });
-
-  it('rejects a repo that is not listed, even inside a listed one', () => {
-    const inner = join(allowed, 'inner');
-    mkdirSync(inner);
-    expect(isAllowedRepo(inner, [allowed])).toBe(false);
-  });
-
-  it('ignores allowlist entries that do not exist', () => {
-    expect(isAllowedRepo(allowed, [join(root, 'nope')])).toBe(false);
-  });
-
-  it('rejects everything with an empty allowlist', () => {
-    expect(isAllowedRepo(allowed, [])).toBe(false);
-  });
-});

@@ -1,6 +1,6 @@
 /**
  * Repository checks (the second half of safeguard 1). Runs after validatePlan and before anything else:
- * allowlist, real top-level git repo, target branch, base commit, and no unsaved work under owned paths.
+ * real top-level git repo, target branch, base commit, and no unsaved work under owned paths.
  * Read-only: git runs with optional locks off, so the user's index is never written.
  */
 
@@ -9,11 +9,10 @@ import { sha256Of } from '../plan/hash.js';
 import { entriesOverlap, parseOwnsEntry, toKey, type OwnsEntry } from '../plan/paths.js';
 import type { NormalizedPlan, ValidationError, ValidationErrorCode } from '../plan/validate.js';
 import { runGit, type GitResult } from '../git/run.js';
-import { canonicalPath, DEFAULT_CASE_INSENSITIVE, isAllowedRepo, samePath } from './canonical.js';
+import { canonicalPath, DEFAULT_CASE_INSENSITIVE, samePath } from './canonical.js';
 import { parseStatusZ, type DirtyPath, type DirtyState } from './status.js';
 
 export interface RepoOptions {
-  readonly allowedRepos: readonly string[];
   readonly caseInsensitivePaths?: boolean;
   /** How many unsaved files to name per task before summarizing the rest. */
   readonly maxListed?: number;
@@ -77,18 +76,12 @@ function dirtyOwnedErrors(plan: NormalizedPlan, dirty: readonly DirtyPath[], max
   return errors;
 }
 
-export async function checkRepo(plan: NormalizedPlan, opts: RepoOptions): Promise<RepoCheckResult> {
+export async function checkRepo(plan: NormalizedPlan, opts: RepoOptions = {}): Promise<RepoCheckResult> {
   const caseInsensitive = opts.caseInsensitivePaths ?? DEFAULT_CASE_INSENSITIVE;
 
   const dir = canonicalPath(plan.repo);
   if (dir === null || !statSync(dir).isDirectory()) {
     return failure('repo-missing', `"${plan.repo}" does not exist or is not a folder.`);
-  }
-  if (!isAllowedRepo(dir, opts.allowedRepos, caseInsensitive)) {
-    return failure(
-      'repo-not-allowed',
-      `"${plan.repo}" is not in allowedRepos in Orchestra's config. Add it there before running Orchestra on it.`,
-    );
   }
 
   const bare = await runGit(['rev-parse', '--is-bare-repository'], { cwd: dir });

@@ -31,6 +31,7 @@ You approve before anything reaches your branch.
 | Stack | TypeScript (strict) on Node, zod, vitest, MCP SDK, plain `git` via `spawn` (no shell) |
 | Coding rules | Orchestra adds none. Each project's own `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` carry the rules ([research §4](research.md#4-project-rules-across-engines-agentsmd--claudemd--geminimd)) |
 | Engines | Claude Code, Codex and Antigravity (`agy`), split evenly across the ones that are ready |
+| What Orchestra is | One provider's agent hands tasks to other providers' agents. You decide what the agents may do; Orchestra adds no allowlists. Its only rule of its own is that agents never overwrite each other's files. |
 | Google lane | Antigravity CLI with a Gemini API key (`modelProvider: "gemini"`); Neon is `gemini-4-neon` ([research §3](research.md#3-vendor-terms-may-orchestra-drive-each-cli-on-your-subscription)) |
 
 ## 4. Defaults for the open questions
@@ -61,7 +62,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | # | Step | Where | Status |
 |---|---|---|---|
 | 1 | Plan schema + validator: ids, paths, normalization, overlap, reserved files, dependencies, engines, even split; plus the plan hash | ☁ | done |
-| 2 | Repo checks: allowlist, target branch, base commit, dirty owned paths | ☁ | done |
+| 2 | Repo checks: real git repo, target branch, base commit, unsaved work under owned paths | ☁ | done |
 | 3 | Worktree manager with explicit git-dir and hardened git calls | ☁ | |
 | 4 | Integrity checks (`.git` pointer, refs, `HEAD`, nested git metadata) | ☁ | |
 | 5 | Scope checker (`-z`, `--no-renames`, ignored files, post-commit re-check) | ☁ | |
@@ -71,7 +72,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 9 | Run store (run folder layout) | ☁ | |
 | 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines | ☁ then 🖥 | |
 | 11 | Rules manifest + brief builder | ☁ | |
-| 12 | Daemon (lazy start, token, allowlist, crash recovery) | ☁ | |
+| 12 | Daemon (lazy start, token, crash recovery) | ☁ | |
 | 13 | Approval dialog | 🖥 | |
 | 14 | MCP shim + `orchestrate-all` skill + installer for both front doors | ☁ then 🖥 | |
 | 15 | Phase 0 checks on your PC ([research §10](research.md#10-must-verify-on-your-machine-phase-0-checklist)) and the end-to-end demo | 🖥 | |

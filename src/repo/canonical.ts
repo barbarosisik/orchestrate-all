@@ -30,16 +30,3 @@ export function samePath(a: string, b: string, caseInsensitive: boolean): boolea
   return norm(a) === norm(b);
 }
 
-/** True only when `repoDir` is exactly one of the allowlisted folders (not merely inside one). */
-export function isAllowedRepo(
-  repoDir: string,
-  allowedRepos: readonly string[],
-  caseInsensitive: boolean = DEFAULT_CASE_INSENSITIVE,
-): boolean {
-  const target = canonicalPath(repoDir);
-  if (target === null) return false;
-  return allowedRepos.some((entry) => {
-    const allowed = canonicalPath(entry);
-    return allowed !== null && samePath(allowed, target, caseInsensitive);
-  });
-}

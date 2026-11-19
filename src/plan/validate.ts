@@ -1,5 +1,5 @@
 /**
- * Plan validation (safeguard 1). Pure: no git, no file system. Repository checks (allowlist, branch tip,
+ * Plan validation (safeguard 1). Pure: no git, no file system. Repository checks (branch tip,
  * dirty owned paths) run separately and add the base commit before the plan is hashed.
  */
 
@@ -46,7 +46,6 @@ export type ValidationErrorCode =
   | 'overlap-strict'
   // Repository checks (src/repo/checks.ts)
   | 'repo-missing'
-  | 'repo-not-allowed'
   | 'not-a-git-repo'
   | 'bare-repo'
   | 'repo-not-toplevel'
