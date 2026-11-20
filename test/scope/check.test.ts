@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runGit } from '../../src/git/run.js';
 import { checkScope, commitTask, taskCommitMessage, type ScopeReport } from '../../src/scope/check.js';
 import type { ScopeTask } from '../../src/scope/rules.js';
 import { createTaskWorktree, type TaskWorktree } from '../../src/worktree/manager.js';
@@ -46,6 +47,26 @@ async function setup(files?: Record<string, string>, hooks: 'on' | 'off' = 'off'
       return result.report;
     },
   };
+}
+
+/** Overwrites the stored object `victim` with the stored object `source`, as a worker could. */
+function overwriteObject(fx: Fixture, victim: string, source: string): void {
+  const file = (id: string): string => join(fx.ctx.commonDir, 'objects', id.slice(0, 2), id.slice(2));
+  chmodSync(file(victim), 0o644);
+  rmSync(file(victim));
+  copyFileSync(file(source), file(victim));
+}
+
+/** Stores a tree from `git mktree` input and returns its id. */
+async function mktree(s: Setup, input: string): Promise<string> {
+  const result = await runGit(['mktree'], { cwd: s.fx.repo.dir, input });
+  if (result.code !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
+async function scopeError(s: Setup, task = api): Promise<string> {
+  const result = await checkScope(s.fx.ctx, s.wt, task, { fromCommit: s.fx.base });
+  return result.ok ? 'ok' : result.error.code;
 }
 
 function summary(report: ScopeReport): string[] {
@@ -161,6 +182,60 @@ describe('checkScope', () => {
     expect(violations(report)).toEqual(['outside-owns .gitattributes']);
   });
 
+  it('reports the tree it compared with', async () => {
+    const s = await setup();
+    expect((await s.scope()).fromTree).toBe(s.fx.repo.git('rev-parse', 'HEAD^{tree}'));
+  });
+
+  it('refuses a start commit whose stored folder listing was rewritten to hide a change', async () => {
+    const s = await setup();
+    s.write('src/api/a.ts', 'changed\n');
+    s.write('src/web/w.ts', 'evil\n');
+    // The worker stores a listing of src/web holding its edited w.ts under the id of the original listing,
+    // so git would report src/web as unchanged.
+    const evilBlob = s.worker('hash-object', '-w', 'src/web/w.ts');
+    const evilTree = await mktree(s, `100644 blob ${evilBlob}\tw.ts\n`);
+    overwriteObject(s.fx, s.fx.repo.git('rev-parse', `${s.fx.base}:src/web`), evilTree);
+    expect(await scopeError(s)).toBe('bad-object');
+  });
+
+  it('refuses when other content was stored beforehand under the id of a tree the worktree produces', async () => {
+    const s = await setup();
+    s.write('src/api/a.ts', 'changed\n');
+    // The worker predicts the new src/api listing; git keeps an object it already has instead of rewriting it.
+    const blob = s.worker('hash-object', '-w', 'src/api/a.ts');
+    const predicted = await mktree(s, `100644 blob ${blob}\ta.ts\n`);
+    overwriteObject(s.fx, predicted, s.fx.repo.git('rev-parse', `${s.fx.base}:src/web`));
+    expect(await scopeError(s)).toBe('bad-object');
+  });
+
+  it('refuses a worktree folder replaced by a link', async () => {
+    const s = await setup();
+    const moved = join(s.fx.home, 'moved');
+    renameSync(s.wt.path, moved);
+    symlinkSync(moved, s.wt.path, 'junction');
+    expect(await scopeError(s)).toBe('worktree-tampered');
+  });
+
+  it('refuses a git folder split in two (HEAD with a commondir file)', async () => {
+    const s = await setup();
+    s.write('src/api/a/HEAD', 'ref: refs/heads/main\n');
+    s.write('src/api/a/commondir', '../b\n');
+    s.write('src/api/b/objects/.keep', '');
+    s.write('src/api/b/refs/.keep', '');
+    expect(await scopeError(s)).toBe('nested-git');
+  });
+
+  it('accepts the per-worktree config file git copies in', async () => {
+    const fx = f.make({ files: { 'src/api/a.ts': 'a\n' } });
+    fx.repo.git('config', 'extensions.worktreeConfig', 'true');
+    fx.repo.git('config', '--worktree', 'core.editor', 'vim');
+    const created = await createTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', startSha: fx.base });
+    if (!created.ok) throw new Error(created.error.message);
+    const result = await checkScope(fx.ctx, created.worktree, api, { fromCommit: fx.base });
+    expect(result.ok ? 'ok' : result.error.code).toBe('ok');
+  });
+
   it('refuses to run git in a worktree whose links were tampered with', async () => {
     const s = await setup();
     writeFileSync(join(s.wt.path, '.git'), 'gitdir: /somewhere/else\n');
@@ -251,6 +326,18 @@ describe('commitTask', () => {
     expect(s.fx.repo.git('rev-parse', s.wt.ref)).toBe(s.fx.base);
   });
 
+  it("never moves the user's branch through a task branch turned into a link", async () => {
+    const s = await setup();
+    s.write('src/api/a.ts', 'changed\n');
+    const report = await s.scope();
+    s.worker('symbolic-ref', s.wt.ref, 'refs/heads/main');
+    const result = await commitTask(s.fx.ctx, s.wt, api, report, { message: 'm\n' });
+    if (!result.ok || !result.committed) throw new Error(JSON.stringify(result));
+    expect(s.fx.repo.git('rev-parse', 'refs/heads/main')).toBe(s.fx.base);
+    expect(s.fx.repo.git('rev-parse', s.wt.ref)).toBe(result.commit);
+    expect(() => s.fx.repo.git('symbolic-ref', '--quiet', s.wt.ref)).toThrow();
+  });
+
   it('refuses when the task branch moved after the check', async () => {
     const s = await setup();
     s.write('src/api/a.ts', 'changed\n');
@@ -271,6 +358,17 @@ describe('commitTask', () => {
     const result = await commitTask(s.fx.ctx, s.wt, api, forged, { message: 'm\n' });
     expect(result.ok ? 'ok' : result.error.code).toBe('recheck-failed');
     if (!result.ok) expect(result.error.message).toContain('moved back');
+    expect(s.fx.repo.git('rev-parse', s.wt.ref)).toBe(s.fx.base);
+  });
+
+  it("moves the branch back when the report's trees can't be verified", async () => {
+    const s = await setup();
+    s.write('src/api/a.ts', 'changed\n');
+    const real = await s.scope();
+    const forged: ScopeReport = { ...real, fromTree: s.fx.repo.git('rev-parse', 'HEAD:README.md') };
+    const result = await commitTask(s.fx.ctx, s.wt, api, forged, { message: 'm\n' });
+    expect(result.ok ? 'ok' : result.error.code).toBe('recheck-failed');
+    if (!result.ok) expect(result.error.message).toContain('not a tree');
     expect(s.fx.repo.git('rev-parse', s.wt.ref)).toBe(s.fx.base);
   });
 
