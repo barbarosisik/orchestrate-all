@@ -68,6 +68,9 @@ export const FORBIDDEN_PATTERNS: readonly string[] = ['.git'];
  */
 export const DEFAULT_HOOK_POLICY: 'off' | 'on' = 'off';
 
+/** Author and committer of the commits Orchestra makes on orchestra/* branches. Never signed. */
+export const ORCHESTRA_GIT_IDENTITY = { name: 'Orchestra', email: 'orchestra@localhost' } as const;
+
 export const DEFAULT_LIMITS = {
   maxTasks: 8,
   maxParallelWorkers: 3,

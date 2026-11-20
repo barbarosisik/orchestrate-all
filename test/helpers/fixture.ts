@@ -28,6 +28,10 @@ export interface FixtureOptions {
 
 export function makeFixture(opts: FixtureOptions = {}): Fixture {
   const repo = makeRepo(opts.files);
+  // The test helper's git ignores system config, Orchestra's git doesn't (Git for Windows sets
+  // core.autocrlf=true there). Pin it in the repository so both see the same line endings; the
+  // autocrlf=true case has its own test.
+  repo.git('config', 'core.autocrlf', 'false');
   const homeParent = mkdtempSync(join(tmpdir(), 'orch-home-'));
   const home = join(homeParent, opts.homeName ?? 'home');
   mkdirSync(home, { recursive: true });

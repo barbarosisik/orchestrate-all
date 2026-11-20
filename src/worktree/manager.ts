@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homeLayout } from '../config/home.js';
 import { repoGit, type RepoContext } from '../git/context.js';
-import { describeGitFailure } from '../git/run.js';
+import { describeGitFailure, LONG_GIT_TIMEOUT_MS } from '../git/run.js';
 import { canonicalPath, isInsidePath, samePath } from '../repo/canonical.js';
 import { branchRef, isValidRunId, isValidTaskId, taskBranch } from '../run/names.js';
 import { adminTarget, checkWorktreeLinks, findAdminDir, sameLocation } from './links.js';
@@ -61,8 +61,6 @@ export interface CreateInput {
   readonly startSha: string;
 }
 
-/** Checking out or deleting a big tree can take a while; other git calls use the default timeout. */
-export const LONG_GIT_TIMEOUT_MS = 10 * 60_000;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 function fail(code: WorktreeErrorCode, message: string): CreateResult {

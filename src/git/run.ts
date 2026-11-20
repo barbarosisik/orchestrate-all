@@ -31,6 +31,8 @@ export interface GitOptions {
 }
 
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
+/** For calls that walk a whole tree (checkout, removal, staging a worktree): big projects take a while. */
+export const LONG_GIT_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Applied to every call. core.fsmonitor can name a program git runs on status/diff, so it is always off;
