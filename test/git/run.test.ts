@@ -1,9 +1,43 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { describeGitFailure, gitEnv, runGit } from '../../src/git/run.js';
+import { delimiter, dirname, join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { describeGitFailure, findGitProgram, gitEnv, runGit, runGitRaw } from '../../src/git/run.js';
 import { makeRepo } from '../helpers/tmprepo.js';
+
+const WINDOWS = process.platform === 'win32';
+const GIT_NAME = WINDOWS ? 'git.exe' : 'git';
+const scratch: string[] = [];
+afterEach(() => {
+  while (scratch.length > 0) rmSync(scratch.pop() as string, { recursive: true, force: true });
+});
+
+function tempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'orch-path-'));
+  scratch.push(dir);
+  return dir;
+}
+
+/** A program named git that is not git: a shell script, or on Windows a copy of node.exe. */
+function plantFakeGit(dir: string): string {
+  const file = join(dir, GIT_NAME);
+  if (WINDOWS) copyFileSync(process.execPath, file);
+  else {
+    writeFileSync(file, '#!/bin/sh\necho planted\n');
+    chmodSync(file, 0o755);
+  }
+  return file;
+}
+
+/** The environment with PATH replaced (keeping Windows' own spelling of the variable). */
+function withPath(path: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  env[key] = path;
+  return env;
+}
+
+const realGit = findGitProgram();
 
 describe('gitEnv', () => {
   it('removes git variables that could redirect a command', () => {
@@ -71,6 +105,89 @@ describe('runGit', () => {
 
   it('rejects when git cannot be started at all', async () => {
     await expect(runGit(['status'], { cwd: '/', gitBinary: 'definitely-not-git-binary' })).rejects.toThrow();
+  });
+
+  it('rejects when PATH has no git', async () => {
+    await expect(runGit(['--version'], { cwd: tmpdir(), env: withPath(tempDir()) })).rejects.toThrow(/not found in PATH/);
+  });
+
+  it('never runs a git program put in the folder it runs in, even when PATH lists "."', async () => {
+    const dir = tempDir();
+    plantFakeGit(dir);
+    const env = withPath(['.', '', dirname(realGit ?? '')].join(delimiter));
+    const result = await runGit(['--version'], { cwd: dir, env });
+    expect(result.stdout).toMatch(/^git version/);
+  });
+
+  it('ignores replacement objects (refs/replace)', async () => {
+    const r = makeRepo({ 'a.txt': 'real\n', 'b.txt': 'fake\n' });
+    try {
+      const real = r.git('rev-parse', 'HEAD:a.txt');
+      r.git('replace', real, r.git('rev-parse', 'HEAD:b.txt'));
+      expect(r.git('cat-file', '-p', real)).toBe('fake');
+      const result = await runGit(['cat-file', '-p', real], { cwd: r.dir });
+      expect(result.stdout).toBe('real\n');
+    } finally {
+      r.cleanup();
+    }
+  });
+});
+
+describe('findGitProgram', () => {
+  it('finds git in PATH', () => {
+    expect(realGit).not.toBeNull();
+    expect(findGitProgram(withPath(dirname(realGit ?? '')))).toBe(realGit);
+  });
+
+  it('skips empty, relative and "." entries, and accepts a quoted folder', () => {
+    const base = tempDir();
+    const relative = join(base, 'rel');
+    mkdirSync(relative);
+    plantFakeGit(relative);
+    const quoted = join(base, 'with space');
+    mkdirSync(quoted);
+    const wanted = plantFakeGit(quoted);
+    const saved = process.cwd();
+    process.chdir(base);
+    try {
+      expect(findGitProgram(withPath(['', '.', 'rel', `"${quoted}"`].join(delimiter)))).toBe(wanted);
+      expect(findGitProgram(withPath(['', '.', 'rel'].join(delimiter)))).toBeNull();
+    } finally {
+      process.chdir(saved);
+    }
+  });
+
+  it('skips a folder named git', () => {
+    const base = tempDir();
+    mkdirSync(join(base, GIT_NAME));
+    expect(findGitProgram(withPath(base))).toBeNull();
+  });
+
+  it.skipIf(WINDOWS)('skips a git file that is not executable', () => {
+    const base = tempDir();
+    writeFileSync(join(base, 'git'), '#!/bin/sh\n');
+    chmodSync(join(base, 'git'), 0o644);
+    expect(findGitProgram(withPath(base))).toBeNull();
+  });
+
+  it('reads PATH whatever its spelling', () => {
+    expect(findGitProgram({ Path: dirname(realGit ?? '') })).toBe(realGit);
+    expect(findGitProgram({})).toBeNull();
+  });
+});
+
+describe('runGitRaw', () => {
+  it('returns stdout as bytes, unchanged', async () => {
+    const r = makeRepo({ 'bin.dat': 'x' });
+    try {
+      const bytes = Buffer.from([0xff, 0x00, 0xfe, 0x0a]);
+      writeFileSync(join(r.dir, 'bin.dat'), bytes);
+      const blob = r.git('hash-object', '-w', 'bin.dat');
+      const result = await runGitRaw(['cat-file', 'blob', blob], { cwd: r.dir });
+      expect(Buffer.compare(result.stdout, bytes)).toBe(0);
+    } finally {
+      r.cleanup();
+    }
   });
 });
 

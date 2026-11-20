@@ -2,13 +2,26 @@
  * The one way Orchestra runs git: no shell, arguments as an array, a cleaned environment, hardening
  * options on every call, and a timeout. Failures come back as data (exit code + stderr), not exceptions;
  * only "git could not be started at all" rejects.
+ *
+ * Git is started by its full path, found in PATH's absolute folders only. A bare `spawn('git')` would let
+ * Windows run a `git.exe` from the folder git runs in, and git runs in worktrees that workers control.
  */
 
 import { spawn } from 'node:child_process';
+import { accessSync, constants, statSync } from 'node:fs';
+import { delimiter, isAbsolute, join } from 'node:path';
 
 export interface GitResult {
   readonly code: number | null;
   readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+}
+
+/** Like GitResult, with stdout as raw bytes (for object contents). */
+export interface RawGitResult {
+  readonly code: number | null;
+  readonly stdout: Buffer;
   readonly stderr: string;
   readonly timedOut: boolean;
 }
@@ -20,6 +33,7 @@ export interface GitOptions {
   readonly input?: string;
   /** Leave stdin open (tests only). By default stdin is closed immediately. */
   readonly keepStdinOpen?: boolean;
+  /** The git program to run. Defaults to the first `git` found in PATH's absolute folders. */
   readonly gitBinary?: string;
   /** Base environment to clean; defaults to this process's environment. */
   readonly env?: NodeJS.ProcessEnv;
@@ -35,13 +49,19 @@ export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 export const LONG_GIT_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * Applied to every call. core.fsmonitor can name a program git runs on status/diff, so it is always off;
- * long paths help on Windows; quotepath off keeps non-ASCII paths readable in messages; automatic gc and
- * maintenance stay off so they never hold locks while workers run.
+ * Applied to every call.
+ * - core.fsmonitor can name a program git runs on status/diff, so it is always off.
+ * - Replacement refs (refs/replace/) and the commit-graph file can make git see other objects or other
+ *   commit trees than the ones stored, so neither is used.
+ * - Long paths help on Windows; quotepath off keeps non-ASCII paths readable in messages.
+ * - Automatic gc and maintenance stay off so they never hold locks while workers run.
  */
 export const GIT_HARDENING: readonly string[] = [
+  '--no-replace-objects',
   '-c',
   'core.fsmonitor=false',
+  '-c',
+  'core.commitGraph=false',
   '-c',
   'core.longpaths=true',
   '-c',
@@ -70,17 +90,63 @@ function withIndexFile(env: NodeJS.ProcessEnv, indexFile: string | undefined): N
   return env;
 }
 
+/** PATH's value (Windows spells the variable "Path"; a copied environment loses the case-insensitivity). */
+function pathValue(env: NodeJS.ProcessEnv): string {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+  return key === undefined ? '' : (env[key] ?? '');
+}
+
+function isProgram(file: string): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+    if (process.platform !== 'win32') accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The full path of the git program: the first `git` (`git.exe` on Windows) in PATH. Empty, relative and
+ * "." entries are skipped, so the folder git would run in is never searched. Null when there is none.
+ */
+export function findGitProgram(env: NodeJS.ProcessEnv = process.env): string | null {
+  const name = process.platform === 'win32' ? 'git.exe' : 'git';
+  for (const entry of pathValue(env).split(delimiter)) {
+    const dir = entry.replace(/^"(.*)"$/, '$1');
+    if (dir.length === 0 || !isAbsolute(dir)) continue;
+    const candidate = join(dir, name);
+    if (isProgram(candidate)) return candidate;
+  }
+  return null;
+}
+
+let found: { readonly path: string; readonly program: string } | undefined;
+
+function gitProgram(env: NodeJS.ProcessEnv): string {
+  const path = pathValue(env);
+  if (found?.path === path) return found.program;
+  const program = findGitProgram(env);
+  if (program === null) throw new Error('Git was not found in PATH. Install Git, then try again.');
+  found = { path, program };
+  return program;
+}
+
 /** One line for an error message: "timed out", git's first stderr line, or the exit code. */
-export function describeGitFailure(result: GitResult): string {
+export function describeGitFailure(result: GitResult | RawGitResult): string {
   if (result.timedOut) return 'timed out';
   return result.stderr.trim().split('\n')[0] || `exit code ${result.code}`;
 }
 
-export function runGit(args: readonly string[], opts: GitOptions): Promise<GitResult> {
+/** Runs git and returns stdout as raw bytes. */
+export function runGitRaw(args: readonly string[], opts: GitOptions): Promise<RawGitResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(opts.gitBinary ?? 'git', [...GIT_HARDENING, ...args], {
+    const base = opts.env ?? process.env;
+    // Throws (and so rejects) when git can't be found.
+    const program = opts.gitBinary ?? gitProgram(base);
+    const child = spawn(program, [...GIT_HARDENING, ...args], {
       cwd: opts.cwd,
-      env: withIndexFile(gitEnv(opts.env ?? process.env), opts.indexFile),
+      env: withIndexFile(gitEnv(base), opts.indexFile),
       shell: false,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -102,15 +168,15 @@ export function runGit(args: readonly string[], opts: GitOptions): Promise<GitRe
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({
-        code,
-        stdout: Buffer.concat(out).toString('utf8'),
-        stderr: Buffer.concat(err).toString('utf8'),
-        timedOut,
-      });
+      resolve({ code, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), timedOut });
     });
 
     if (opts.input !== undefined) child.stdin.end(opts.input);
     else if (opts.keepStdinOpen !== true) child.stdin.end();
   });
+}
+
+export async function runGit(args: readonly string[], opts: GitOptions): Promise<GitResult> {
+  const raw = await runGitRaw(args, opts);
+  return { ...raw, stdout: raw.stdout.toString('utf8') };
 }

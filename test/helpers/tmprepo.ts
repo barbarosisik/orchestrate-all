@@ -23,7 +23,12 @@ export interface TmpRepo {
   cleanup(): void;
 }
 
-export function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n' }): TmpRepo {
+export interface MakeRepoOptions {
+  /** Extra `git init` arguments, e.g. ["--ref-format=reftable"] or ["--object-format=sha256"]. */
+  readonly initArgs?: readonly string[];
+}
+
+export function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n' }, opts: MakeRepoOptions = {}): TmpRepo {
   const dir = mkdtempSync(join(tmpdir(), 'orch-repo-'));
   const git = (...args: string[]): string =>
     execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: dir, env: GIT_ENV, encoding: 'utf8' }).trim();
@@ -38,9 +43,14 @@ export function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n
     return git('rev-parse', 'HEAD');
   };
 
-  git('init', '-q', '-b', 'main');
-  for (const [p, c] of Object.entries(files)) write(p, c);
-  commitAll('initial');
+  try {
+    git('init', '-q', '-b', 'main', ...(opts.initArgs ?? []));
+    for (const [p, c] of Object.entries(files)) write(p, c);
+    commitAll('initial');
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 
   return { dir, git, write, commitAll, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

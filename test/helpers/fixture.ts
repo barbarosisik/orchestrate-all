@@ -24,10 +24,12 @@ export interface FixtureOptions {
   readonly hooks?: HookPolicy;
   /** A sub-folder name for the home, e.g. to test spaces or non-ASCII characters. */
   readonly homeName?: string;
+  /** Extra `git init` arguments for the repository. */
+  readonly initArgs?: readonly string[];
 }
 
 export function makeFixture(opts: FixtureOptions = {}): Fixture {
-  const repo = makeRepo(opts.files);
+  const repo = makeRepo(opts.files, { initArgs: opts.initArgs ?? [] });
   // The test helper's git ignores system config, Orchestra's git doesn't (Git for Windows sets
   // core.autocrlf=true there). Pin it in the repository so both see the same line endings; the
   // autocrlf=true case has its own test.
@@ -63,6 +65,16 @@ export function installHook(fixture: Fixture, name: string, marker: string): voi
   const file = join(hooksDir, name);
   writeFileSync(file, `#!/bin/sh\necho ${name} >> "${shPath(marker)}"\n`);
   chmodSync(file, 0o755);
+}
+
+/** True when the installed git accepts these `git init` arguments (newer formats need a newer git). */
+export function gitSupports(initArgs: readonly string[]): boolean {
+  try {
+    makeRepo({ 'a.txt': 'a\n' }, { initArgs }).cleanup();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Runs a fixture-owned list of cleanups after each test. */
