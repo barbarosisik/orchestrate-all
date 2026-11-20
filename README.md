@@ -7,7 +7,8 @@
 **Orchestra**: describe a coding task once. An AI orchestrator splits it across Claude Code, Codex and Antigravity
 workers, and a plain-code conductor makes sure they never clash.
 
-> **Status: early build (Phase 1, steps 1–2 of 15).** The plan checks and repository checks exist; nothing runs agents yet.
+> **Status: early build (Phase 1, steps 1–5 of 15).** The plan checks, repository checks, worktree manager, tamper checks
+> and scope check exist; nothing runs agents yet.
 > Everything else below describes the plan. Facts about vendor CLIs are still being verified. Progress is tracked
 > in [docs/PLAN.md](docs/PLAN.md).
 
@@ -49,6 +50,7 @@ orchestrating, and no model can talk its way past a rule.
 | R4 | **Full visibility** | For every subtask: engine, model, status, time, tokens (where reported), logs and the exact files changed, all saved to a run folder. |
 | R5 | **You approve** | Starting, finalizing and discarding a run each need your own click in a dialog the conductor shows. No tool call, HTTP request or model can approve. |
 | R6 | **Minimal footprint** | Orchestra keeps its data outside your repo. In your repo it creates only `orchestra/<runId>/*` branches and worktrees. It never edits your repo config or tracked files, and never touches your branch until you approve. |
+| R7 | **Works with whichever engines are ready** | Engines are detected at the start of every run. The plan may only use ready engines, and tasks are split evenly across them; with one engine ready, it does everything. |
 
 ## Architecture
 
@@ -150,14 +152,15 @@ every source, are in [docs/research/](docs/research/).
 
 ## Planned stack (not final)
 
-- TypeScript on Node 24 (strict mode)
+- TypeScript on Node 22 or newer (strict mode)
 - `@modelcontextprotocol/sdk`, `zod` for all input validation, `vitest` for tests
 - Plain `git` through `child_process.spawn` (`shell: false`, arguments as arrays)
 - Windows 11 is the first target platform
 
 ## Development
 
-Needs Node 22 or newer. Tests run on Windows and Linux in GitHub Actions.
+Needs Node 22 or newer and a Git from 2023 or later (the scope check uses `--attr-source`). Tests run on Windows and
+Linux in GitHub Actions.
 
 ```bash
 npm ci
@@ -170,7 +173,7 @@ npm run coverage
 
 - **Conductor:** the Orchestra program itself. Plain code that acts as the referee.
 - **Orchestrator:** the AI model you talk to. It plans and reviews but doesn't write project files during a run.
-- **Worker:** one engine run on one task (`claude -p`, `codex exec`, `gemini`).
+- **Worker:** one engine run on one task (`claude -p`, `codex exec`, `agy -p`).
 - **Owns:** the exact files and folders a task may change.
 - **Reserved files:** files no normal task may change, such as manifests, lock files and root config.
 - **Integration branch:** `orchestra/<runId>/integration`, where accepted tasks are merged one at a time.

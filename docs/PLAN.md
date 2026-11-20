@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–2 done; step 3 next (2026-11-19). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–5 done; step 6 next (2026-11-20). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -45,15 +45,18 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Reserved files | Manifests, lockfiles, root config, CI, `.env*`, agent config folders and instruction files. Only a separate "reserved" run (one task, its own approval) may change them. `.git` can never be owned. |
 | Task cap | 8 tasks per run |
 | Replanning | Needs your re-approval whenever ownership widens or tasks are added |
-| Worktrees | Outside the repo, under a short Orchestra folder |
+| Worktrees | Outside the repo: `<ORCHESTRA_HOME>/wt/<runId>/<taskId>` (`ORCHESTRA_HOME` defaults to `~/.orchestra`), locked for their whole life |
 | Claude workers | Project rules only (`--setting-sources project`). No project hooks, no MCP servers, no shell unless the task opts in. |
 | Claude CLI | Upgrade recommended (≥ 2.1.325); the adapter gates features on the detected version |
-| Internal commits on `orchestra/*` | "Orchestra" identity, signing off. **Whether your git hooks run on them is still your call.** |
+| Internal commits on `orchestra/*` | "Orchestra" identity, never signed. Your repository's git hooks don't run on Orchestra's internal steps (worktree creation, branch moves, internal commits). **This is a config value; whether hooks should run is still your call.** |
 | Review | Deterministic checks first, then the orchestrator's review; no auto-accept |
 | Finalize | Merge commit into your branch, with your identity and hooks |
 | Limits | 3 parallel workers; 30 minutes per task |
 | Approval | A native Windows dialog shown by the conductor |
 | `.env` copying | Never, unless you opt in per repo |
+| Ignored files in a task's worktree | Listed in the scope report (marked when inside the task's owned paths), never committed, not counted as a violation |
+| Tamper checks | Remote-tracking refs are left out (an editor's background fetch moves them). Anything else of yours that changes during a run (a commit on your branch, a branch switch) is reported, even if you did it. In your index, only entries hidden from `git status` are watched; ordinary staging isn't reported. |
+| Sparse checkouts | Not supported yet: Orchestra stops with a clear message |
 
 ## 5. Build order
 
@@ -63,9 +66,9 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 |---|---|---|---|
 | 1 | Plan schema + validator: ids, paths, normalization, overlap, reserved files, dependencies, engines, even split; plus the plan hash | ☁ | done |
 | 2 | Repo checks: real git repo, target branch, base commit, unsaved work under owned paths | ☁ | done |
-| 3 | Worktree manager with explicit git-dir and hardened git calls | ☁ | |
-| 4 | Integrity checks (`.git` pointer, refs, `HEAD`, nested git metadata) | ☁ | |
-| 5 | Scope checker (`-z`, `--no-renames`, ignored files, post-commit re-check) | ☁ | |
+| 3 | Worktree manager with explicit git-dir and hardened git calls | ☁ | done |
+| 4 | Integrity checks (`.git` pointer, refs, `HEAD`, nested git metadata) | ☁ | done |
+| 5 | Scope checker (`-z`, `--no-renames`, ignored files, post-commit re-check) | ☁ | done |
 | 6 | Acceptance runner + review state | ☁ | |
 | 7 | Merge plumbing (`merge-tree --write-tree`, `commit-tree`, compare-and-swap `update-ref`) | ☁ | |
 | 8 | Finalize checks | ☁ | |

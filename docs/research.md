@@ -1,6 +1,6 @@
 # Research: harnessing, limiting and planning coding agents
 
-**Date:** 2026-11-19. **Status:** research only; nothing is built yet.
+**Date:** 2026-11-19. **Status:** research notes written before the build started; progress is tracked in [PLAN.md](PLAN.md).
 
 This document collects what Orchestra needs to know before Phase 1:
 - how each engine (Claude Code, Codex, Gemini/Antigravity) can be run as a locked-down headless worker;
