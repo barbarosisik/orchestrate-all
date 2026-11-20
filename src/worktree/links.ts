@@ -53,6 +53,11 @@ function firstLine(text: string | null): string | null {
   return line.length === 0 || line.includes('\n') ? null : line;
 }
 
+/** A one-line control file (HEAD, gitdir, commondir) without its line ending, or null. */
+export function readControlLine(path: string): string | null {
+  return firstLine(readControlFile(path));
+}
+
 /**
  * Compares where two paths really are (symlinks and short names resolved), also when the last part doesn't
  * exist: then the parent folders are resolved and the names compared.
@@ -67,7 +72,7 @@ export function sameLocation(a: string, b: string, caseInsensitive: boolean): bo
 
 /** Where an admin folder's `gitdir` file points (the worktree's `.git`), or null. */
 export function adminTarget(adminDir: string): string | null {
-  const line = firstLine(readControlFile(join(adminDir, 'gitdir')));
+  const line = readControlLine(join(adminDir, 'gitdir'));
   return line === null ? null : resolveStored(line, adminDir);
 }
 
@@ -122,7 +127,7 @@ export function checkWorktreeLinks(
       message: `${join(wt.adminDir, 'gitdir')} no longer points to ${gitFile}.`,
     });
   }
-  const common = firstLine(readControlFile(join(wt.adminDir, 'commondir')));
+  const common = readControlLine(join(wt.adminDir, 'commondir'));
   if (common === null || !sameLocation(resolveStored(common, wt.adminDir), commonDir, caseInsensitive)) {
     problems.push({
       code: 'worktree-admin',
