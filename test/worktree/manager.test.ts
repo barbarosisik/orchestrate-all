@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { worktreeGit } from '../../src/git/context.js';
@@ -119,6 +119,45 @@ describe('createTaskWorktree', () => {
     expect(fx.repo.git('branch', '--list', 'orchestra/*')).toBe('');
     const list = await listWorktrees(fx.ctx);
     expect(list.ok && list.worktrees.length).toBe(1);
+  });
+
+  it("records the worktree's own config file: none, or the copy git makes of the main checkout's", async () => {
+    const plain = f.make();
+    expect((await create(plain)).worktreeConfig).toBe('missing');
+    const fx = f.make();
+    fx.repo.git('config', 'extensions.worktreeConfig', 'true');
+    fx.repo.git('config', '--worktree', 'core.editor', 'vim');
+    const wt = await create(fx);
+    expect(wt.worktreeConfig).toMatch(/^file:[0-9a-f]{64}$/);
+    expect(readFileSync(join(wt.adminDir, 'config.worktree'), 'utf8')).toContain('vim');
+  });
+
+  it('refuses a repository with a sparse checkout, and cleans up', async () => {
+    const fx = f.make({ files: { 'README.md': 'hello\n', 'src/a.ts': 'a\n', 'docs/d.md': 'd\n' } });
+    fx.repo.git('sparse-checkout', 'set', 'src');
+    const result = await createTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', startSha: fx.base });
+    expect(result.ok ? 'ok' : result.error.code).toBe('unsupported');
+    expect(existsSync(join(fx.home, 'wt', 'run1', 'api'))).toBe(false);
+    expect(fx.repo.git('branch', '--list', 'orchestra/*')).toBe('');
+  });
+
+  it("refuses a run folder replaced by a link, so nothing lands in the user's repository", async () => {
+    const fx = f.make({ files: { 'README.md': 'hello\n', 'src/a.ts': 'a\n' } });
+    mkdirSync(join(fx.home, 'wt'), { recursive: true });
+    symlinkSync(join(fx.repo.dir, 'src'), join(fx.home, 'wt', 'run1'), 'junction');
+    const result = await createTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'zz', startSha: fx.base });
+    expect(result.ok ? 'ok' : result.error.code).toBe('bad-layout');
+    expect(existsSync(join(fx.repo.dir, 'src', 'zz'))).toBe(false);
+    expect(fx.repo.git('status', '--porcelain')).toBe('');
+  });
+
+  it('refuses a worktrees folder replaced by a link', async () => {
+    const fx = f.make();
+    const elsewhere = join(fx.home, 'elsewhere');
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(fx.home, 'wt'), 'junction');
+    const result = await createTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', startSha: fx.base });
+    expect(result.ok ? 'ok' : result.error.code).toBe('bad-layout');
   });
 
   it('refuses run and task ids that are not safe names', async () => {
@@ -266,6 +305,31 @@ describe('removeTaskWorktree', () => {
       }
     },
   );
+
+  it('deletes nothing through a run folder replaced by a link', async () => {
+    const fx = f.make();
+    const wt = await create(fx);
+    const victim = join(fx.home, 'victim');
+    mkdirSync(join(victim, 'api'), { recursive: true });
+    writeFileSync(join(victim, 'api', 'precious.txt'), 'user data\n');
+    renameSync(join(wt.path, '..'), join(fx.home, 'moved'));
+    symlinkSync(victim, join(wt.path, '..'), 'junction');
+    const result = await removeTaskWorktree(fx.ctx, wt, { deleteBranchAt: wt.startSha, retries: 0 });
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(' ')).toContain('deletes nothing through a link');
+    expect(readFileSync(join(victim, 'api', 'precious.txt'), 'utf8')).toBe('user data\n');
+  });
+
+  it("removes a task branch turned into a link, never the branch it points to", async () => {
+    const fx = f.make();
+    const wt = await create(fx);
+    fx.repo.git('-C', wt.path, 'symbolic-ref', wt.ref, 'refs/heads/main');
+    const result = await removeTaskWorktree(fx.ctx, wt, { deleteBranchAt: wt.startSha, retries: 0 });
+    expect(result).toMatchObject({ ok: false, folderRemoved: true, branchDeleted: true });
+    expect(result.problems.join(' ')).toContain('link to refs/heads/main');
+    expect(fx.repo.git('rev-parse', 'refs/heads/main')).toBe(fx.base);
+    expect(fx.repo.git('for-each-ref', '--format=%(refname)', 'refs/heads/orchestra/')).toBe('');
+  });
 
   it('leaves the run folder while other tasks still use it', async () => {
     const fx = f.make();

@@ -8,6 +8,12 @@
  * The worktree is created locked (so `git worktree prune` and other tools leave it alone) and stays locked
  * until Orchestra removes it. Removal only ever touches folders under `<home>/wt` and branches under
  * `orchestra/`, and deletes a branch only if it still points where the caller expects.
+ *
+ * `<home>/wt` and the run folder must be real folders, never links: a link put there by a worker would send
+ * a new checkout, or a removal, somewhere else (into the user's repository, or onto files to delete).
+ *
+ * Sparse checkouts are refused for now: a new worktree copies the main checkout's sparse settings, and the
+ * scope check expects every file of the commit to be in the worktree.
  */
 
 import { lstatSync, mkdirSync } from 'node:fs';
@@ -15,8 +21,9 @@ import { lstat, rm, rmdir, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { homeLayout } from '../config/home.js';
-import { repoGit, type RepoContext } from '../git/context.js';
+import { repoGit, worktreeGit, type RepoContext } from '../git/context.js';
 import { describeGitFailure, LONG_GIT_TIMEOUT_MS } from '../git/run.js';
+import { fingerprintPath } from '../integrity/fingerprint.js';
 import { canonicalPath, isInsidePath, samePath } from '../repo/canonical.js';
 import { branchRef, isValidRunId, isValidTaskId, taskBranch } from '../run/names.js';
 import { adminTarget, checkWorktreeLinks, findAdminDir, sameLocation } from './links.js';
@@ -36,6 +43,12 @@ export interface TaskWorktree {
   readonly adminDir: string;
   /** The lock reason git keeps while Orchestra owns the worktree. */
   readonly lockReason: string;
+  /**
+   * Fingerprint of the worktree's own config file (`<adminDir>/config.worktree`) at creation: "missing", or
+   * the copy git makes of the main checkout's file when the repository uses per-worktree config. Any later
+   * change is tampering.
+   */
+  readonly worktreeConfig: string;
 }
 
 export type WorktreeErrorCode =
@@ -45,7 +58,8 @@ export type WorktreeErrorCode =
   | 'path-exists'
   | 'branch-exists'
   | 'git-failed'
-  | 'bad-layout';
+  | 'bad-layout'
+  | 'unsupported';
 
 export interface WorktreeError {
   readonly code: WorktreeErrorCode;
@@ -84,6 +98,16 @@ function isSymlink(path: string): boolean {
   }
 }
 
+/** True for a real folder; false for a link (or Windows junction), a file, or nothing. */
+function isRealFolder(path: string): boolean {
+  try {
+    const info = lstatSync(path);
+    return info.isDirectory() && !info.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The commit a task starts from: the plan's base commit, or for a task with dependencies the integration
  * branch tip, which by then holds its dependencies' merged work.
@@ -100,11 +124,27 @@ export function startCommitFor(
   return integrationTip;
 }
 
-/** Creates `<home>/wt` and returns its canonical path. */
-function worktreeRoot(ctx: RepoContext): string {
-  const root = homeLayout(ctx.home).worktrees;
+/**
+ * `<home>/wt` as a canonical path, created if needed. The home folder itself may be a link (the user's
+ * choice); `wt` must be a real folder. Null if it isn't.
+ */
+function worktreeRoot(ctx: RepoContext): string | null {
+  mkdirSync(ctx.home, { recursive: true });
+  const home = canonicalPath(ctx.home);
+  if (home === null) return null;
+  const root = homeLayout(home).worktrees;
   mkdirSync(root, { recursive: true });
-  return canonicalPath(root) ?? root;
+  return isRealFolder(root) ? root : null;
+}
+
+/** Problems with the run folder Orchestra is about to use, or null. */
+function runFolderProblem(runDir: string): string | null {
+  try {
+    lstatSync(runDir);
+  } catch {
+    return null;
+  }
+  return isRealFolder(runDir) ? null : `${runDir} is not a real folder (a link or a file was put there).`;
 }
 
 function overlapsRepo(ctx: RepoContext, folder: string): boolean {
@@ -123,6 +163,7 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
   if (!FULL_SHA.test(startSha)) return fail('bad-start', `"${startSha}" is not a full commit id.`);
 
   const root = worktreeRoot(ctx);
+  if (root === null) return fail('bad-layout', `${homeLayout(ctx.home).worktrees} is not a real folder.`);
   if (overlapsRepo(ctx, root)) {
     return fail(
       'home-overlaps-repo',
@@ -131,6 +172,8 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
     );
   }
   const runDir = join(root, runId);
+  const runProblem = runFolderProblem(runDir);
+  if (runProblem !== null) return fail('bad-layout', runProblem);
   const path = join(runDir, taskId);
   if (pathExists(path)) return fail('path-exists', `${path} already exists. Orchestra never reuses a folder.`);
 
@@ -168,27 +211,55 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
     { timeoutMs: LONG_GIT_TIMEOUT_MS },
   );
 
-  const canonical = canonicalPath(path) ?? path;
   const guessAdmin = join(ctx.commonDir, 'worktrees', taskId);
-  const partial = { runId, taskId, path: canonical, branch, ref, startSha, adminDir: guessAdmin, lockReason };
-  if (add.code !== 0) {
-    await removeTaskWorktree(ctx, partial, { deleteBranchAt: startSha, retries: 0 });
-    return fail('git-failed', `git worktree add failed: ${describeGitFailure(add)}`);
-  }
+  const partial: TaskWorktree = {
+    runId,
+    taskId,
+    path,
+    branch,
+    ref,
+    startSha,
+    adminDir: guessAdmin,
+    lockReason,
+    worktreeConfig: 'missing',
+  };
+  // Cleanup after a failure goes through removeTaskWorktree, which refuses anything not laid out as expected.
+  const undo = async (handle: TaskWorktree, message: string, code: WorktreeErrorCode): Promise<CreateResult> => {
+    const removed = await removeTaskWorktree(ctx, handle, { deleteBranchAt: startSha, retries: 0 });
+    const leftover = removed.ok ? '' : ` Cleanup was incomplete: ${removed.problems.join(' ')}`;
+    return fail(code, `${message}${leftover}`);
+  };
+  if (add.code !== 0) return undo(partial, `git worktree add failed: ${describeGitFailure(add)}`, 'git-failed');
 
-  const adminDir = findAdminDir(ctx.commonDir, canonical, ctx.caseInsensitivePaths);
+  // The checkout must have landed exactly here, not through a link swapped in while git ran.
+  const real = canonicalPath(path);
+  if (real === null || !samePath(real, path, ctx.caseInsensitivePaths)) {
+    return undo(partial, `git created the worktree somewhere other than ${path}.`, 'bad-layout');
+  }
+  const adminDir = findAdminDir(ctx.commonDir, path, ctx.caseInsensitivePaths);
   const problems =
     adminDir === null
       ? ['git did not record the new worktree under the repository’s worktrees folder.']
-      : checkWorktreeLinks({ path: canonical, adminDir }, ctx.commonDir, ctx.caseInsensitivePaths).map(
-          (p) => p.message,
-        );
+      : checkWorktreeLinks({ path, adminDir }, ctx.commonDir, ctx.caseInsensitivePaths).map((p) => p.message);
   if (adminDir === null || problems.length > 0) {
     const handle = { ...partial, adminDir: adminDir ?? guessAdmin };
-    await removeTaskWorktree(ctx, handle, { deleteBranchAt: startSha, retries: 0 });
-    return fail('bad-layout', `The new worktree is not linked as expected: ${problems.join(' ')}`);
+    return undo(handle, `The new worktree is not linked as expected: ${problems.join(' ')}`, 'bad-layout');
   }
-  return { ok: true, worktree: { ...partial, adminDir } };
+
+  const worktree: TaskWorktree = {
+    ...partial,
+    adminDir,
+    worktreeConfig: await fingerprintPath(join(adminDir, 'config.worktree')),
+  };
+  const sparse = await worktreeGit(ctx, worktree, ['config', '--type=bool', '--get', 'core.sparseCheckout']);
+  if (sparse.code === 0 && sparse.stdout.trim() === 'true') {
+    return undo(
+      worktree,
+      'This repository uses a sparse checkout, which Orchestra does not support yet. Tasks need a full checkout.',
+      'unsupported',
+    );
+  }
+  return { ok: true, worktree };
 }
 
 export interface RemoveOptions {
@@ -215,10 +286,15 @@ function ownershipProblem(ctx: RepoContext, wt: TaskWorktree): string | null {
   if (wt.branch !== taskBranch(wt.runId, wt.taskId) || wt.ref !== branchRef(wt.branch)) {
     return `"${wt.branch}" is not the Orchestra branch for this task.`;
   }
-  const root = canonicalPath(homeLayout(ctx.home).worktrees);
+  const home = canonicalPath(ctx.home);
+  const root = home === null ? null : homeLayout(home).worktrees;
   if (root === null || !samePath(wt.path, join(root, wt.runId, wt.taskId), ci) || overlapsRepo(ctx, wt.path)) {
     return `${wt.path} is not an Orchestra worktree folder.`;
   }
+  // Nothing is deleted through a link: a worker could point one at the user's files.
+  if (!isRealFolder(root)) return `${root} is not a real folder; Orchestra deletes nothing through a link.`;
+  const runProblem = runFolderProblem(dirname(wt.path));
+  if (runProblem !== null) return `${runProblem} Orchestra deletes nothing through a link.`;
   if (!samePath(dirname(wt.adminDir), join(ctx.commonDir, 'worktrees'), ci)) {
     return `${wt.adminDir} is not inside the repository's worktrees folder.`;
   }
@@ -285,11 +361,20 @@ export async function removeTaskWorktree(
 
   let branchDeleted = false;
   if (opts.deleteBranchAt !== undefined) {
+    const link = await repoGit(ctx, ['symbolic-ref', '--quiet', wt.ref]);
     const exists = await repoGit(ctx, ['rev-parse', '--verify', '--quiet', wt.ref]);
-    if (exists.code !== 0) {
+    if (link.code === 0) {
+      // The branch was turned into a link to another ref: remove the link itself, never what it points to.
+      const unlinked = await repoGit(ctx, ['update-ref', '--no-deref', '-d', wt.ref]);
+      branchDeleted = unlinked.code === 0;
+      problems.push(
+        `Branch ${wt.branch} had been turned into a link to ${link.stdout.trim()}; ` +
+          (branchDeleted ? 'removed the link and left its target alone.' : `the link could not be removed (${describeGitFailure(unlinked)}).`),
+      );
+    } else if (exists.code !== 0) {
       branchDeleted = true;
     } else {
-      const deleted = await repoGit(ctx, ['update-ref', '-d', wt.ref, opts.deleteBranchAt]);
+      const deleted = await repoGit(ctx, ['update-ref', '--no-deref', '-d', wt.ref, opts.deleteBranchAt]);
       branchDeleted = deleted.code === 0;
       if (!branchDeleted) {
         problems.push(
