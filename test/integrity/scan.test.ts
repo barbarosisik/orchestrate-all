@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { diffRecords, fingerprintFolder, fingerprintPath, isEmptyDiff } from '../../src/integrity/fingerprint.js';
-import { scanForNestedGit } from '../../src/integrity/nested.js';
+import { isGitName, scanForNestedGit } from '../../src/integrity/nested.js';
 
 let root = '';
 beforeEach(() => {
@@ -86,6 +86,24 @@ describe('scanForNestedGit', () => {
     expect((await scanForNestedGit(root)).findings).toEqual([{ path: 'build/cache', kind: 'repo-layout' }]);
   });
 
+  it('finds a git folder split in two: HEAD with a commondir file, and objects and refs elsewhere', async () => {
+    file('src/api/a/HEAD', 'ref: refs/heads/main\n');
+    file('src/api/a/commondir', '../b\n');
+    file('src/api/b/config', '[core]\n\tpager = evil\n');
+    mkdirSync(join(root, 'src/api/b/objects'), { recursive: true });
+    mkdirSync(join(root, 'src/api/b/refs'), { recursive: true });
+    // "b" alone has no HEAD, so git won't use it; "a" is the way in.
+    expect((await scanForNestedGit(root)).findings).toEqual([{ path: 'src/api/a', kind: 'repo-layout' }]);
+  });
+
+  it('finds .git names that Windows or macOS would treat as .git', async () => {
+    const names = ['.g\u200cit', '.gi\ufefft'];
+    // Windows itself can't create names ending in a dot or a space.
+    if (process.platform !== 'win32') names.push('.git.', '.git ');
+    names.forEach((name, i) => file(`d${i}/${name}/x`));
+    expect((await scanForNestedGit(root)).findings.map((x) => x.kind)).toEqual(names.map(() => 'git-entry'));
+  });
+
   it.skipIf(process.platform === 'win32')('does not follow symlinked folders', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'orch-outside-'));
     try {
@@ -114,4 +132,13 @@ describe('scanForNestedGit', () => {
       }
     },
   );
+});
+
+describe('isGitName', () => {
+  it('folds case, trailing dots and spaces, and characters macOS ignores', () => {
+    for (const name of ['.git', '.GIT', '.Git.', '.git  ', '.g\u200cit', '\u200d.git', '.git\u206a']) {
+      expect(isGitName(name)).toBe(true);
+    }
+    for (const name of ['git', '.gitignore', '.git-x', '..git', '.gi', 'x.git']) expect(isGitName(name)).toBe(false);
+  });
 });

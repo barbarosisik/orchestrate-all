@@ -1,16 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   checkIntegrity,
-  defaultGlobalGitFiles,
   takeBaseline,
   type IntegrityOptions,
   type IntegrityReport,
 } from '../../src/integrity/check.js';
 import { createTaskWorktree, type TaskWorktree } from '../../src/worktree/manager.js';
-import { fixtures, type Fixture } from '../helpers/fixture.js';
+import { fixtures, gitSupports, type Fixture, type FixtureOptions } from '../helpers/fixture.js';
 
 const f = fixtures();
 const scratch: string[] = [];
@@ -29,8 +28,8 @@ interface Setup {
   codes(expectedTip?: string): Promise<string[]>;
 }
 
-async function setup(prepare?: (fx: Fixture) => void): Promise<Setup> {
-  const fx = f.make({ files: { 'README.md': 'hello\n', 'src/a.ts': 'a\n' } });
+async function setup(prepare?: (fx: Fixture) => void, fixtureOpts: FixtureOptions = {}): Promise<Setup> {
+  const fx = f.make({ files: { 'README.md': 'hello\n', 'src/a.ts': 'a\n' }, ...fixtureOpts });
   prepare?.(fx);
   const created = await createTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', startSha: fx.base });
   if (!created.ok) throw new Error(created.error.message);
@@ -147,6 +146,34 @@ describe("checkIntegrity: tampering with the task's own worktree", () => {
     expect(await s.codes()).toEqual(['worktree-config']);
   });
 
+  it('accepts the per-worktree config file git copies in, and catches a change to it', async () => {
+    const s = await setup((fx) => {
+      fx.repo.git('config', 'extensions.worktreeConfig', 'true');
+      fx.repo.git('config', '--worktree', 'core.editor', 'vim');
+    });
+    expect(s.wt.worktreeConfig).toMatch(/^file:/);
+    expect(await s.codes()).toEqual([]);
+    writeFileSync(join(s.wt.adminDir, 'config.worktree'), '[core]\n\tfsmonitor = ./evil\n');
+    expect(await s.codes()).toEqual(['worktree-config']);
+  });
+
+  it('catches a task branch turned into a link to the user\'s branch', async () => {
+    const s = await setup();
+    workerGit(s, 'symbolic-ref', s.wt.ref, 'refs/heads/main');
+    const report = await s.check();
+    // Git now sees the worktree on main itself, through the link.
+    expect(report.violations.map((v) => v.code)).toEqual(['worktree-head', 'task-branch']);
+    expect(report.violations[1]?.message).toContain('link to refs/heads/main');
+  });
+
+  it('catches a worktree folder replaced by a link', async () => {
+    const s = await setup();
+    const moved = join(s.fx.home, 'moved');
+    renameSync(s.wt.path, moved);
+    symlinkSync(moved, s.wt.path, 'junction');
+    expect(await s.codes()).toEqual(['worktree-folder']);
+  });
+
   it('catches a commondir pointing at another repository', async () => {
     const s = await setup();
     writeFileSync(join(s.wt.adminDir, 'commondir'), `${join(tmpdir(), 'evil-repo')}\n`);
@@ -190,8 +217,36 @@ describe("checkIntegrity: changes to the user's repository", () => {
     const s = await setup();
     s.fx.repo.git('checkout', '-q', '-b', 'other');
     const report = await s.check();
-    expect(report.violations.map((v) => v.code)).toEqual(['user-refs', 'repo-files']);
-    expect(report.violations[1]?.message).toContain('HEAD');
+    expect(report.violations.map((v) => v.code)).toEqual(['user-refs', 'user-checkouts', 'repo-files']);
+    expect(report.violations[1]?.message).toContain(s.fx.ctx.repoRoot);
+    expect(report.violations[2]?.message).toContain('HEAD');
+  });
+
+  it("catches one of the user's branches turned into a link", async () => {
+    const s = await setup((fx) => fx.repo.git('branch', 'feature'));
+    s.fx.repo.git('symbolic-ref', 'refs/heads/feature', 'refs/heads/main');
+    const report = await s.check();
+    expect(report.violations.map((v) => v.code)).toEqual(['user-refs']);
+    expect(report.violations[0]?.message).toContain('refs/heads/feature');
+  });
+
+  it("catches an index entry hidden from git status in the user's checkout, but not ordinary staging", async () => {
+    const s = await setup();
+    s.fx.repo.write('staged.txt');
+    s.fx.repo.git('add', 'staged.txt');
+    expect(await s.codes()).toEqual([]);
+    s.fx.repo.git('update-index', '--skip-worktree', 'README.md');
+    const report = await s.check();
+    expect(report.violations.map((v) => v.code)).toEqual(['hidden-index']);
+    expect(report.violations[0]?.message).toContain('main:README.md');
+  });
+
+  it("catches a planted hook in a submodule's git folder", async () => {
+    const s = await setup((fx) => fx.repo.git('init', '-q', '--bare', join(fx.ctx.commonDir, 'modules', 'libs', 'sub')));
+    writeFileSync(join(s.fx.ctx.commonDir, 'modules', 'libs', 'sub', 'hooks', 'pre-commit'), '#!/bin/sh\n');
+    const report = await s.check();
+    expect(report.violations.map((v) => v.code)).toEqual(['repo-files']);
+    expect(report.violations[0]?.message).toContain('modules/libs/sub/hooks/pre-commit');
   });
 
   it('catches a planted hook, a config change and an info/exclude change', async () => {
@@ -216,13 +271,57 @@ describe("checkIntegrity: changes to the user's repository", () => {
     const path = join(userWt, 'mine');
     const s = await setup((fx) => fx.repo.git('worktree', 'add', '-q', '-b', 'mine', path));
     s.fx.repo.git('-C', path, 'switch', '-q', '-c', 'mine-2');
-    expect(await s.codes()).toEqual(['user-refs', 'user-worktrees']);
+    expect(await s.codes()).toEqual(['user-refs', 'user-checkouts', 'user-worktrees']);
+  });
+
+  it("catches an index entry hidden in the user's own linked worktree", async () => {
+    const userWt = mkdtempSync(join(tmpdir(), 'orch-user-wt-'));
+    scratch.push(userWt);
+    const path = join(userWt, 'mine');
+    const s = await setup((fx) => fx.repo.git('worktree', 'add', '-q', '-b', 'mine', path));
+    s.fx.repo.git('-C', path, 'update-index', '--assume-unchanged', 'src/a.ts');
+    const report = await s.check();
+    expect(report.violations.map((v) => v.code)).toEqual(['hidden-index']);
+    expect(report.violations[0]?.message).toContain('worktrees/mine:src/a.ts');
   });
 
   it('catches a change to the global git config', async () => {
     const s = await setup();
     writeFileSync(s.globalFile, '[core]\n\tpager = evil\n');
-    expect(await s.codes()).toEqual(['global-git-config']);
+    expect(await s.codes()).toEqual(['git-config-files']);
+  });
+
+  it('catches a change to a config file the repository includes, wherever it is', async () => {
+    let included = '';
+    const s = await setup((fx) => {
+      included = join(fx.home, 'user-extra.gitconfig');
+      writeFileSync(included, '[user]\n\tname = Me\n');
+      fx.repo.git('config', 'include.path', included);
+    });
+    writeFileSync(included, '[user]\n\tname = Me\n[filter "evil"]\n\tclean = evil-program\n');
+    expect(await s.codes()).toEqual(['git-config-files']);
+  });
+
+  it('catches the creation of an included file that did not exist yet, and of the attributes file', async () => {
+    for (const key of ['include.path', 'core.attributesFile']) {
+      let named = '';
+      const s = await setup((fx) => {
+        named = join(fx.home, 'not-yet');
+        fx.repo.git('config', key, named);
+      });
+      writeFileSync(named, key === 'include.path' ? '[core]\n\tpager = evil\n' : '* filter=evil\n');
+      expect(await s.codes()).toEqual(['git-config-files']);
+    }
+  });
+
+  it.skipIf(!gitSupports(['--ref-format=reftable']))('works in a repository that keeps refs in a reftable', async () => {
+    const s = await setup(undefined, { initArgs: ['--ref-format=reftable'] });
+    expect(await s.codes()).toEqual([]);
+    workerGit(s, 'switch', '-q', '-c', 'elsewhere');
+    expect(await s.codes()).toEqual(['worktree-head', 'user-refs']);
+    const other = await setup(undefined, { initArgs: ['--ref-format=reftable'] });
+    other.fx.repo.git('checkout', '-q', '-b', 'other');
+    expect(await other.codes()).toEqual(['user-refs', 'user-checkouts']);
   });
 
   it('reports a git failure instead of passing', async () => {
@@ -252,11 +351,4 @@ describe('takeBaseline', () => {
   });
 });
 
-describe('defaultGlobalGitFiles', () => {
-  it('watches ~/.gitconfig and the XDG config file', () => {
-    expect(defaultGlobalGitFiles({})).toEqual([join(homedir(), '.gitconfig'), join(homedir(), '.config', 'git', 'config')]);
-    const xdg = join(homedir(), 'xdg');
-    expect(defaultGlobalGitFiles({ XDG_CONFIG_HOME: xdg })[1]).toBe(join(xdg, 'git', 'config'));
-    expect(defaultGlobalGitFiles({ XDG_CONFIG_HOME: 'relative' })[1]).toBe(join(homedir(), '.config', 'git', 'config'));
-  });
-});
+
