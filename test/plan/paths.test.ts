@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { entriesOverlap, parseOwnsEntry, type OwnsEntry } from '../../src/plan/paths.js';
+import {
+  covers,
+  entriesOverlap,
+  isWindowsDeviceName,
+  parseOwnsEntry,
+  windowsPathIssue,
+  type OwnsEntry,
+} from '../../src/plan/paths.js';
 
 function entry(raw: string): OwnsEntry {
   const result = parseOwnsEntry(raw);
@@ -138,5 +145,45 @@ describe('entriesOverlap', () => {
 
   it('a file never contains another path', () => {
     expect(entriesOverlap(entry('src/a'), entry('src/a.ts'))).toBe(false);
+  });
+});
+
+describe('covers', () => {
+  it('is one-directional: a folder covers what is inside it, not the other way round', () => {
+    expect(covers(entry('src/'), entry('src/a.ts'))).toBe(true);
+    expect(covers(entry('src/a.ts'), entry('src/'))).toBe(false);
+    expect(covers(entry('src/a.ts'), entry('SRC/A.ts'))).toBe(true);
+  });
+});
+
+describe('isWindowsDeviceName', () => {
+  it('matches device names with or without an extension, in any case', () => {
+    for (const name of ['con', 'CON', 'nul.txt', 'Aux.tar.gz', 'com1', 'LPT9.log']) {
+      expect(isWindowsDeviceName(name), name).toBe(true);
+    }
+  });
+
+  it('ignores names that only start like one', () => {
+    for (const name of ['console', 'nullable.ts', 'com10', 'auxiliary']) {
+      expect(isWindowsDeviceName(name), name).toBe(false);
+    }
+  });
+});
+
+describe('windowsPathIssue', () => {
+  it('accepts ordinary file paths, including brackets', () => {
+    expect(windowsPathIssue('src/api/handler.ts')).toBeNull();
+    expect(windowsPathIssue('docs/café/[draft] notes (1).md')).toBeNull();
+  });
+
+  it('names what Windows would refuse', () => {
+    expect(windowsPathIssue('src/a:b.ts')).toBe('invalid-char');
+    expect(windowsPathIssue('src/what?.ts')).toBe('invalid-char');
+    expect(windowsPathIssue('src/back\\slash.ts')).toBe('invalid-char');
+    expect(windowsPathIssue('src/trailing.')).toBe('trailing-dot-or-space');
+    expect(windowsPathIssue('src/ leading.ts')).toBe('trailing-dot-or-space');
+    expect(windowsPathIssue('src/aux.ts')).toBe('reserved-device-name');
+    expect(windowsPathIssue('PROGRA~1/x.ts')).toBe('short-name');
+    expect(windowsPathIssue('src//a.ts')).toBe('empty');
   });
 });

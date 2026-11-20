@@ -8,7 +8,7 @@ import { statSync } from 'node:fs';
 import { sha256Of } from '../plan/hash.js';
 import { entriesOverlap, parseOwnsEntry, toKey, type OwnsEntry } from '../plan/paths.js';
 import type { NormalizedPlan, ValidationError, ValidationErrorCode } from '../plan/validate.js';
-import { runGit, type GitResult } from '../git/run.js';
+import { describeGitFailure, runGit, type GitResult } from '../git/run.js';
 import { canonicalPath, DEFAULT_CASE_INSENSITIVE, samePath } from './canonical.js';
 import { parseStatusZ, type DirtyPath, type DirtyState } from './status.js';
 
@@ -42,8 +42,7 @@ function failure(code: ValidationErrorCode, message: string, path = 'repo'): Rep
 }
 
 function gitFailure(what: string, result: GitResult): RepoCheckResult {
-  const detail = result.timedOut ? 'timed out' : result.stderr.trim().split('\n')[0] || `exit code ${result.code}`;
-  return failure('git-failed', `git ${what} failed: ${detail}`);
+  return failure('git-failed', `git ${what} failed: ${describeGitFailure(result)}`);
 }
 
 function dirtyEntry(dirty: DirtyPath): OwnsEntry {

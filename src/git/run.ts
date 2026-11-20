@@ -23,13 +23,19 @@ export interface GitOptions {
   readonly gitBinary?: string;
   /** Base environment to clean; defaults to this process's environment. */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Use this index file instead of the repository's own (sets GIT_INDEX_FILE after cleaning). Lets the
+   * conductor stage a worktree's content in a private index that no worker has touched.
+   */
+  readonly indexFile?: string;
 }
 
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 
 /**
  * Applied to every call. core.fsmonitor can name a program git runs on status/diff, so it is always off;
- * long paths help on Windows; quotepath off keeps non-ASCII paths readable in messages.
+ * long paths help on Windows; quotepath off keeps non-ASCII paths readable in messages; automatic gc and
+ * maintenance stay off so they never hold locks while workers run.
  */
 export const GIT_HARDENING: readonly string[] = [
   '-c',
@@ -38,6 +44,10 @@ export const GIT_HARDENING: readonly string[] = [
   'core.longpaths=true',
   '-c',
   'core.quotepath=false',
+  '-c',
+  'gc.auto=0',
+  '-c',
+  'maintenance.auto=false',
 ];
 
 /** Copies the environment without any GIT_* variable (they can redirect git to another repo or index). */
@@ -53,11 +63,22 @@ export function gitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv
   return env;
 }
 
+function withIndexFile(env: NodeJS.ProcessEnv, indexFile: string | undefined): NodeJS.ProcessEnv {
+  if (indexFile !== undefined) env.GIT_INDEX_FILE = indexFile;
+  return env;
+}
+
+/** One line for an error message: "timed out", git's first stderr line, or the exit code. */
+export function describeGitFailure(result: GitResult): string {
+  if (result.timedOut) return 'timed out';
+  return result.stderr.trim().split('\n')[0] || `exit code ${result.code}`;
+}
+
 export function runGit(args: readonly string[], opts: GitOptions): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(opts.gitBinary ?? 'git', [...GIT_HARDENING, ...args], {
       cwd: opts.cwd,
-      env: gitEnv(opts.env ?? process.env),
+      env: withIndexFile(gitEnv(opts.env ?? process.env), opts.indexFile),
       shell: false,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -61,6 +61,13 @@ export const DEFAULT_RESERVED_PATTERNS: readonly string[] = [
 /** Paths no task may ever own, not even a reserved task. */
 export const FORBIDDEN_PATTERNS: readonly string[] = ['.git'];
 
+/**
+ * Whether the repository's own git hooks run on Orchestra's internal git steps (creating worktrees, moving
+ * orchestra/* branches, internal commits). Off until the owner decides otherwise (open decision in
+ * docs/HANDOFF.md). Finalizing into the user's branch is a separate step with its own rules.
+ */
+export const DEFAULT_HOOK_POLICY: 'off' | 'on' = 'off';
+
 export const DEFAULT_LIMITS = {
   maxTasks: 8,
   maxParallelWorkers: 3,

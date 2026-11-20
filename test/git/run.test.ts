@@ -1,5 +1,8 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { gitEnv, runGit } from '../../src/git/run.js';
+import { describeGitFailure, gitEnv, runGit } from '../../src/git/run.js';
 import { makeRepo } from '../helpers/tmprepo.js';
 
 describe('gitEnv', () => {
@@ -68,5 +71,34 @@ describe('runGit', () => {
 
   it('rejects when git cannot be started at all', async () => {
     await expect(runGit(['status'], { cwd: '/', gitBinary: 'definitely-not-git-binary' })).rejects.toThrow();
+  });
+});
+
+describe('runGit with a private index', () => {
+  it('stages into the given index file and leaves the repository index alone', async () => {
+    const r = makeRepo({ 'a.txt': 'a\n' });
+    const dir = mkdtempSync(join(tmpdir(), 'orch-index-'));
+    try {
+      const indexFile = join(dir, 'index');
+      const head = r.git('rev-parse', 'HEAD');
+      expect((await runGit(['read-tree', head], { cwd: r.dir, indexFile })).code).toBe(0);
+      r.write('b.txt', 'b\n');
+      expect((await runGit(['add', '-A'], { cwd: r.dir, indexFile })).code).toBe(0);
+      const staged = await runGit(['diff', '--cached', '--name-only', head], { cwd: r.dir, indexFile });
+      expect(staged.stdout.trim()).toBe('b.txt');
+      expect(existsSync(indexFile)).toBe(true);
+      expect(r.git('diff', '--cached', '--name-only')).toBe('');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      r.cleanup();
+    }
+  });
+});
+
+describe('describeGitFailure', () => {
+  it('prefers a timeout, then the first stderr line, then the exit code', () => {
+    expect(describeGitFailure({ code: null, stdout: '', stderr: 'x', timedOut: true })).toBe('timed out');
+    expect(describeGitFailure({ code: 128, stdout: '', stderr: 'fatal: bad\nmore\n', timedOut: false })).toBe('fatal: bad');
+    expect(describeGitFailure({ code: 1, stdout: '', stderr: '', timedOut: false })).toBe('exit code 1');
   });
 });

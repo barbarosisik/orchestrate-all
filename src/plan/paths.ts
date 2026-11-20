@@ -40,14 +40,36 @@ export function toKey(normalizedPath: string): string {
   return withoutSlash.toLowerCase().normalize('NFC');
 }
 
+/** True for names Windows reserves for devices (CON, NUL, COM1, ...), with or without an extension. */
+export function isWindowsDeviceName(name: string): boolean {
+  return DEVICE_NAME.test(name.split('.')[0] ?? name);
+}
+
 function segmentIssue(segment: string): PathIssue | null {
   if (segment === '.' || segment === '..') return 'dot-segment';
   if (WILDCARD.test(segment)) return 'wildcard';
   if (INVALID_CHAR.test(segment)) return 'invalid-char';
   if (segment.endsWith('.') || segment.endsWith(' ') || segment.startsWith(' ')) return 'trailing-dot-or-space';
   if (SHORT_NAME.test(segment)) return 'short-name';
-  const stem = segment.split('.')[0] ?? segment;
-  if (DEVICE_NAME.test(stem)) return 'reserved-device-name';
+  if (isWindowsDeviceName(segment)) return 'reserved-device-name';
+  return null;
+}
+
+// In a file name (not an "owns" pattern), "[" and "]" are fine; "*", "?" and "\" are not allowed on Windows.
+const INVALID_NAME_CHAR = /[<>:"|?*\\\u0000-\u001f\u007f]/;
+
+/**
+ * Why a repo-relative file path (as git stores it, with "/") could not be checked out on Windows, or null if
+ * it can. Used for files a worker adds, so a task can't leave the user with a tree Windows can't open.
+ */
+export function windowsPathIssue(gitPath: string): PathIssue | null {
+  for (const segment of gitPath.split('/')) {
+    if (segment.length === 0) return 'empty';
+    if (INVALID_NAME_CHAR.test(segment)) return 'invalid-char';
+    if (segment.endsWith('.') || segment.endsWith(' ') || segment.startsWith(' ')) return 'trailing-dot-or-space';
+    if (SHORT_NAME.test(segment)) return 'short-name';
+    if (isWindowsDeviceName(segment)) return 'reserved-device-name';
+  }
   return null;
 }
 
@@ -75,7 +97,7 @@ export function parseOwnsEntry(raw: string): ParseResult {
 }
 
 /** True when `outer` is a folder that contains `inner`, or both name the same path. */
-function covers(outer: OwnsEntry, inner: OwnsEntry): boolean {
+export function covers(outer: OwnsEntry, inner: OwnsEntry): boolean {
   if (outer.key === inner.key) return true;
   return outer.isFolder && inner.key.startsWith(`${outer.key}/`);
 }
@@ -104,7 +126,7 @@ export const PATH_ISSUE_TEXT: Record<PathIssue, string> = {
   'too-long': `is longer than ${MAX_PATH_LENGTH} characters`,
   'dot-segment': 'contains a "." or ".." segment',
   wildcard: 'contains a wildcard (* ? [ ]); list exact files, or a folder ending in "/"',
-  'invalid-char': 'contains a character Windows does not allow in names (< > : " | or a control character)',
+  'invalid-char': 'contains a character Windows does not allow in names (< > : " | ? * \\ or a control character)',
   'trailing-dot-or-space': 'has a name that starts with a space or ends with a dot or space',
   'short-name': 'looks like a Windows 8.3 short name (for example PROGRA~1)',
   'reserved-device-name': 'uses a reserved Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)',

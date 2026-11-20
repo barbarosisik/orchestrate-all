@@ -154,6 +154,13 @@ describe('validatePlan: identity', () => {
     expect(codesOf(plan([task('integration')]))).toContain('reserved-id');
   });
 
+  it('rejects ids that Windows reserves for devices, since ids become folder names', () => {
+    for (const id of ['con', 'nul', 'aux', 'prn', 'com1', 'lpt9']) {
+      expect(errorsOf(plan([task(id)]))[0], id).toMatchObject({ code: 'reserved-id', path: 'tasks[0].id' });
+    }
+    expect(codesOf(plan([task('console')]))).toEqual([]);
+  });
+
   it('rejects a relative repo path', () => {
     expect(codesOf(plan([task('api')], { repo: 'my-repo' }))).toContain('bad-repo-path');
   });

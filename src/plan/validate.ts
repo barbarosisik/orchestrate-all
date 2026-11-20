@@ -6,7 +6,14 @@
 import { posix, win32 } from 'node:path';
 import type { z } from 'zod';
 import { dependsTransitively, findCycle } from './graph.js';
-import { minimizeEntries, parseOwnsEntry, PATH_ISSUE_TEXT, entriesOverlap, type OwnsEntry } from './paths.js';
+import {
+  entriesOverlap,
+  isWindowsDeviceName,
+  minimizeEntries,
+  parseOwnsEntry,
+  PATH_ISSUE_TEXT,
+  type OwnsEntry,
+} from './paths.js';
 import { compilePatterns } from './reserved.js';
 import { PlanSchema, type EngineName, type PlanInput, type Task } from './schema.js';
 import { checkEvenSplit } from './split.js';
@@ -66,7 +73,8 @@ export type NormalizedPlan = Omit<PlanInput, 'baseSha'>;
 
 export type ValidationResult = { ok: true; plan: NormalizedPlan } | { ok: false; errors: ValidationError[] };
 
-const RESERVED_TASK_IDS = new Set(['integration']);
+/** Ids Orchestra uses for its own branches (`orchestra/<runId>/integration`). */
+export const RESERVED_TASK_IDS: ReadonlySet<string> = new Set(['integration']);
 const BRANCH_FORBIDDEN_CHARS = /[\u0000- \u007f~^:?*[\\]/;
 
 function formatPath(path: readonly PropertyKey[]): string {
@@ -141,6 +149,13 @@ function checkIdentity(plan: PlanInput, ctx: ValidationContext, errors: Validati
     seen.add(task.id);
     if (RESERVED_TASK_IDS.has(task.id)) {
       errors.push({ path: `tasks[${i}].id`, code: 'reserved-id', message: `"${task.id}" is reserved by Orchestra.` });
+    } else if (isWindowsDeviceName(task.id)) {
+      // Task ids become folder names (the task's worktree), and Windows can't create a folder with this name.
+      errors.push({
+        path: `tasks[${i}].id`,
+        code: 'reserved-id',
+        message: `"${task.id}" is a reserved Windows device name and can't be used as a folder name.`,
+      });
     }
   });
 }

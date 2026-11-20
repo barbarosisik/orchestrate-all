@@ -22,11 +22,23 @@ export function canonicalPath(path: string): string | null {
   }
 }
 
-export function samePath(a: string, b: string, caseInsensitive: boolean): boolean {
-  const norm = (p: string): string => {
-    const slashed = p.replace(/\\/g, '/').replace(/\/+$/, '');
-    return caseInsensitive ? slashed.toLowerCase() : slashed;
-  };
-  return norm(a) === norm(b);
+/** Forward slashes, Unicode NFC, no trailing slash; lower-case when the file system ignores case. */
+function comparable(path: string, caseInsensitive: boolean): string {
+  const slashed = path.replace(/\\/g, '/').replace(/\/+$/, '').normalize('NFC');
+  return caseInsensitive ? slashed.toLowerCase() : slashed;
 }
 
+export function samePath(a: string, b: string, caseInsensitive: boolean): boolean {
+  return comparable(a, caseInsensitive) === comparable(b, caseInsensitive);
+}
+
+/**
+ * True when `child` is `parent` itself or somewhere below it. Compares whole path segments, never a bare
+ * string prefix, so "/repo-evil" is not inside "/repo". Pass canonical paths.
+ */
+export function isInsidePath(child: string, parent: string, caseInsensitive: boolean): boolean {
+  const c = comparable(child, caseInsensitive);
+  const p = comparable(parent, caseInsensitive);
+  // Roots work too: "/" becomes "" and "C:\" becomes "c:", so the prefix is "/" or "c:/".
+  return c === p || c.startsWith(`${p}/`);
+}
