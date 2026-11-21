@@ -8,8 +8,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { accessSync, constants, statSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
+import { absolutePathFolders, isRunnableFile, pathValue } from '../os/path-search.js';
 
 export interface GitResult {
   readonly code: number | null;
@@ -90,33 +90,15 @@ function withIndexFile(env: NodeJS.ProcessEnv, indexFile: string | undefined): N
   return env;
 }
 
-/** PATH's value (Windows spells the variable "Path"; a copied environment loses the case-insensitivity). */
-function pathValue(env: NodeJS.ProcessEnv): string {
-  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
-  return key === undefined ? '' : (env[key] ?? '');
-}
-
-function isProgram(file: string): boolean {
-  try {
-    if (!statSync(file).isFile()) return false;
-    if (process.platform !== 'win32') accessSync(file, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The full path of the git program: the first `git` (`git.exe` on Windows) in PATH. Empty, relative and
  * "." entries are skipped, so the folder git would run in is never searched. Null when there is none.
  */
 export function findGitProgram(env: NodeJS.ProcessEnv = process.env): string | null {
   const name = process.platform === 'win32' ? 'git.exe' : 'git';
-  for (const entry of pathValue(env).split(delimiter)) {
-    const dir = entry.replace(/^"(.*)"$/, '$1');
-    if (dir.length === 0 || !isAbsolute(dir)) continue;
+  for (const dir of absolutePathFolders(env)) {
     const candidate = join(dir, name);
-    if (isProgram(candidate)) return candidate;
+    if (isRunnableFile(candidate)) return candidate;
   }
   return null;
 }
