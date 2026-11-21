@@ -36,13 +36,14 @@ treat it as background only: where it disagrees with this file or PLAN.md, these
 | Step 7: merging (accepted tasks one at a time into `orchestra/<runId>/integration`: re-hashed inputs, scope re-checked, overlap refused, `merge-tree` without rename detection, exactly tip plus the task's changes, compare-and-swap, re-check) | `src/merge/` |
 | Step 8: finalize checks (the integration branch's history against the recorded merges; a preview of the merge into the user's branch at its current tip; nothing of the user's overwritten; every merged task's acceptance commands re-run on exactly what the branch would hold, in a check worktree; a report) | `src/finalize/`, check worktrees in `src/worktree/manager.ts` |
 | Step 9: run store (the run folder `<home>/runs/<runId>`: approved plan and hash, the run's state, the last finalize report, a capped JSON Lines log of decisions, and per task and round the worker's output, the gate and the commit's diff; atomic writes, no links, everything read back checked against its schema and the plan; enough to carry on after a crash) | `src/store/` |
-| Tests: 724 passing on macOS (2 more run only on Windows); CI runs Windows + Linux (Node 22 and 24) | `test/`, `.github/workflows/ci.yml` |
+| Step 10, part 1: engines (detection at the start of a run: installed, version, signed in or on the API key, through each CLI's own status command; one adapter per engine: command line, worker environment without billing variables, brief on stdin, event stream read into tokens, refusals, final result and violations; worker runs saved into the run folder, with a time limit and cancellation that stop the whole process tree; the agents' own config folders compared before and after each worker) | `src/engines/`, `src/os/process-tree.ts` |
+| Tests: 907 passing on macOS (2 more run only on Windows); CI runs Windows + Linux (Node 22 and 24); engines are tested against fake engines only | `test/`, `.github/workflows/ci.yml` |
 
 **CI** runs on pull requests and on pushes to `main`. Steps 3–5 went into `dev` through PR #1, step 6 through PR #2,
-step 7 through PR #3, step 8 through PR #4 and step 9 through PR #5, all green on Windows and Linux (the first runs
-found test-only problems: git's `C:/` paths, hidden `.git` files, Linux running a script without `#!` through `sh`, a
-Windows folder held by a test's process, and in step 8 a test that assumed letter case is ignored, as on Windows and
-macOS but not Linux).
+step 7 through PR #3, step 8 through PR #4, step 9 through PR #5 and step 10's first part through PR #6, all green on
+Windows and Linux (the first runs found test-only problems: git's `C:/` paths, hidden `.git` files, Linux running a
+script without `#!` through `sh`, a Windows folder held by a test's process, and in step 8 a test that assumed letter
+case is ignored, as on Windows and macOS but not Linux).
 
 **Review:** an independent review of steps 3–5 found 9 problems (a `git.exe` planted in a worktree, task branches turned
 into links to the user's branch, rewritten git objects, unwatched included config, links in Orchestra's folders, a
@@ -51,9 +52,20 @@ and each has a test. Reftable repositories also work now (HEADs are read through
 found 12 problems (a run setup that could be edited without breaking a hash, review limits and thresholds read from the
 stored state itself, states the steps can't produce, a log repair that failed on a damaged byte or near the cap, worker
 output held in memory after a failed write, `close()` releasing the run while writes were still going, reports too large
-to save, log records over the line limit, and smaller ones). All are fixed and each has a test.
+to save, log records over the line limit, and smaller ones). All are fixed and each has a test. An independent review of
+step 10's first part found 13 problems (Claude's settings file in the temp folder, which Codex's sandbox may write, so
+a concurrent worker could plant hooks; Claude's billing and mode checks passing when its init event or a field was
+missing; a cancel during preparation lost; a late time limit relabelling a clean run; time limits too long for a
+timer; edits behind linked dotfiles and skill folders unseen; Claude's automatic memory, Codex's bundled skills and the
+scripts settings run left unwatched; same-size edits to files named like sign-ins; MCP calls in Codex runs; Claude's
+subscription token refused; pre-release order). All are fixed and each has a test; so are five of its smaller
+points (the worktree checked again just before the start, the `Monitor` tool, briefs starting with "/", one program
+path per engine, and `mayStillBeRunning`).
 
-### How steps 3–9 fit together (for the run manager later)
+### How steps 3–10 fit together (for the run manager later)
+
+Before planning: `detectEngines()` (step 10, `src/engines/detect.ts`) says which engines are ready. The plan may only
+use those (`defaultValidationContext(detection.ready)`); show the user each engine's `problems` and `warnings`.
 
 0. Once the plan is approved: `createRun(home, { runId: newRunId(), ready, hooks: ctx.hooks, caseInsensitivePaths:
    ctx.caseInsensitivePaths, review: { maxRevisionRounds, threshold } })` makes the run folder and returns its
@@ -66,10 +78,19 @@ to save, log records over the line limit, and smaller ones). All are fixed and e
    from, the log is the history.
 1. `createTaskWorktree(ctx, { runId, taskId, startSha })`: `startSha` comes from `startCommitFor(task, baseSha, integrationTip)`.
    Record it (`startSha`, status "working").
-2. `takeBaseline(ctx)` before the worker starts.
-3. Worker runs (step 10). Its output goes to `store.openOutput(taskId, round, 'stdout' | 'stderr')` (capped); the worker
-   run (engine, model, times, exit code, tokens) goes into the task's `workers`.
-4. `checkIntegrity(ctx, wt, baseline, expectedTip)`: any violation stops the task.
+2. `takeBaseline(ctx)` and `snapshotAgentConfig({ home: os.homedir(), env: process.env })` before the worker starts.
+3. `runWorker({ store, worktree: wt, round, brief, shell, signal })` (step 10, `src/engines/worker.ts`) runs the task's
+   engine and model from the plan, in this task's worktree only. It records the worker run in the task's `workers`
+   before the start (so a crash shows it never ended) and at the end (exit code, error, tokens), logs `worker`
+   started/finished, and saves the raw output with `store.openOutput`. `outcome.status` is "completed" only when the
+   engine exited with 0, said it finished, and broke none of the conditions it was started under (API billing,
+   another permission mode, MCP servers, a shell that should be off). Steps 4–6 run in every case before anything
+   is committed, but not while `outcome.mayStillBeRunning` (something the engine started may still write).
+   Before each worker, run `detectEngines({ engines: [task.engine] })` again (cheap): it catches a sign-in changed
+   during the run. Before a revision round, the worktree must hold exactly the expected tip again: a file left in it
+   (a planted `.claude/settings.json`, say) would be loaded as project settings by the next Claude worker.
+4. `checkIntegrity(ctx, wt, baseline, expectedTip)`, and `compareAgentConfig(before, await snapshotAgentConfig(...))`
+   logged with `agentConfigEntry`: any violation or change stops the task.
 5. `checkScope(ctx, wt, task, { fromCommit: expectedTip })`, then `commitTask(...)` with `taskCommitMessage(runId, task)`.
    Then `store.saveDiff(ctx, taskId, round, expectedTip, commit)` keeps the diff for the user.
 6. `runAcceptanceGate(ctx, wt, task, { baseline: <the passing report's baseline>, commit })`: runs the acceptance
@@ -106,26 +127,30 @@ to save, log records over the line limit, and smaller ones). All are fixed and e
 `ctx` comes from `repoContext(readyPlan)`. All git goes through `src/git/run.ts` via `repoGit`/`worktreeGit`, which name
 the git folder explicitly and turn hooks off unless the user allows them.
 
-## Next: step 10, engines
+## Next: step 10, part 2: containment
 
-Detect which engines are ready and drive each one as a locked-down worker (☁ for the adapters, 🖥 for the real CLIs).
+Part 1 built detection, the adapters and worker runs (tested against fake engines). What is left needs the owner's
+machine and a decision (see open decisions):
 
-- **What:**
-  - Detection at the start of every run (R7): `claude`, `codex` and `agy` installed and signed in (Claude and Codex), or
-    the Gemini API key present (`agy`). Login checks never read credential files (research §5.0).
-  - One adapter per engine, starting the CLI locked down as in research §5.1–5.3 (no shell, an allowlisted
-    environment, billing variables stripped), the brief on stdin. It parses the engine's event stream, writes the raw
-    output with `store.openOutput`, and records the worker run in the task's `workers`: engine, model, times, exit
-    code and tokens (Claude `result.usage`, Codex `turn.completed.usage`, `agy` `result.usage`; the store's
-    `TokenUsage` has input, output, cache read/write, reasoning and cost, null where an engine doesn't report one).
-  - Sandbox workers so they can write only their own worktree. The conductor commits for them, so they never need
-    `.git`. This closes most of "Not covered yet": the object store, writes to the run folder, races on Orchestra's
-    folders.
-  - Compare the agents' config folders (`~/.claude`, `~/.codex`, `~/.gemini`) before and after each worker
-    (research §7.5).
-  - A Windows Job Object, so processes a worker or an acceptance command leaves running are stopped.
-  - Gate Claude features on the detected CLI version (≥ 2.1.325 recommended).
-- **Tests:** fake engines only (Node scripts in temp folders that print recorded event streams), never the real CLIs.
+- **An OS sandbox around each whole worker**, so it can write only its own worktree (plus the CLI's own state folder),
+  not the run folder, the repository's object store or Orchestra's folders. Today: Codex sandboxes its own commands
+  and edits (`workspace-write`); `agy --sandbox` sandboxes its commands where it can; Claude Code's file tools are never
+  sandboxed, and on native Windows neither are its commands. Options (research §7.6): macOS `sandbox-exec`, Linux
+  bubblewrap, Windows MXC (`@microsoft/mxc-sdk`, Windows 11 24H2 build 26100.9278 or later). Each CLI must keep its
+  sign-in (macOS Keychain, Windows Credential Manager, `~/.codex/auth.json`) and its network access to its vendor.
+- **A Windows Job Object**, so processes a worker or an acceptance command leaves running are stopped. Node can't make
+  one alone: it needs a small native library (for example the `koffi` FFI library) or the MXC SDK.
+- **The engines on the owner's machine** (research §10): the flags and event shapes the adapters use (`agy`'s come
+  from docs only), the answers of `claude auth status`, `codex login status` and `agy -p /usage`, whether
+  `codex exec` finds a Windows sandbox, and for Claude: whether `--settings` takes inline JSON on the owner's version,
+  whether `--disallowedTools Bash Monitor` is accepted and leaves both out of the init event's `tools` (the adapter
+  fails a run whose init lists a shell tool that should be off), whether the init event always has `apiKeySource`,
+  `permissionMode`, `mcp_servers`, `tools` and `cwd` (missing ones fail the run), and whether Claude Code's npm
+  package still has `cli.js` for the Windows shim (otherwise its arguments would need cmd.exe, which Orchestra
+  refuses for them). For `agy`: whether closing stdin ends the session before the turn finishes, and its oldest
+  usable version.
+- **Tests:** the sandbox and the Job Object get fake-engine tests that try to write outside the worktree and leave
+  processes behind; CI runs them on Windows and Linux.
 
 After that, one line each (details in PLAN.md):
 
@@ -135,16 +160,44 @@ After that, one line each (details in PLAN.md):
 14. **Front doors:** the `/orchestrate-all` skill plus the MCP connection for Claude Code and Codex, and an installer.
 15. **Real-world test:** on the owner's machine, then a full demo.
 
-## Not covered yet by steps 3–9
+## Not covered yet by steps 3–10
 
-- **Checks beyond the repository.** Research §7.5 also asks to compare the user's main checkout files and the agents'
-  own config folders (`~/.claude`, `~/.codex`, `~/.gemini`) before and after each worker. Only git's own config and
-  attributes files are watched so far. The agent folders belong with the engine adapters (step 10), which know which
-  files matter.
+- **Checks beyond the repository.** The agents' own config folders are compared before and after each worker (step
+  10). The user's main checkout files are not (research §7.5): only git's own config and attributes files and the
+  user's refs and checkouts are watched there.
+- **Agent config folders, limits:** `~/.claude.json` (it can hold an API key, and changes on every run) and plugin code
+  under `~/.claude/plugins/marketplaces` and `cache` are not watched (the installed-plugins lists are). Scripts are
+  watched at the top of the agent folders and in the watched folders, not wherever a setting points. A folder with
+  more than 5000 entries can't be compared in full and is reported every time. With workers running in parallel, or
+  the user's own agent sessions writing (Claude's memory), a change is reported by every worker that ran while it
+  happened. The first `agy` run may rewrite (normalize) `~/.gemini/antigravity-cli/settings.json`. A worker can plant
+  a file there and remove it again between two snapshots, and a worker running meanwhile loads it (the sandbox, part
+  2, closes this).
+- **Detection sees a little more than workers:** `codex login status` reads the user's `config.toml`, which workers
+  ignore (a keyring sign-in setting there could make detection say ready while workers can't sign in), and
+  `claude auth status` reads the user's settings (a personal API key helper there refuses Claude, although workers
+  would use the subscription).
+- **A project's own `.claude/settings.json`** can set environment variables (`env`) for Claude, such as a provider
+  switch or a base URL, that the worker environment leaves out; whether Claude then still reports
+  `apiKeySource: "none"` must be checked on the owner's machine (step 10 part 2).
+- **Processes:** a process the engine started in a session of its own is not stopped and can keep its output open
+  (`mayStillBeRunning`). Worker runs don't record a process id, so after a conductor crash a worker can outlive it
+  (step 12). Detection probes and acceptance commands have no deadline if stopping them fails (workers do).
+- **What a worker may do besides editing its worktree.** Claude workers run in `acceptEdits` mode on project settings
+  only; a repository the user trusted in Claude Code can widen this with its own `.claude/settings.json` (allow rules,
+  extra directories; an API key helper makes the run fail on API billing). Workers can read anything the user can,
+  and use the network as their engine allows (Codex: off in its sandbox). The conductor's checks after the worker stay
+  the final word.
+- **`agy`:** its flags, its events and the `/usage` check for API-key mode come from Antigravity's docs and changelog,
+  not from runs (research §10).
+- **Claude Code's version** is read once per run by detection; a CLI that updates itself during a run is not checked
+  again.
+- **Briefs** are step 11: `runWorker` takes the brief as text.
 - **The object store.** A worker that can write to the repository's `.git/objects` can damage it. The scope check
   re-hashes every tree it relies on, so this can't hide an out-of-scope change, but file contents (blobs) are not
-  re-hashed. For step 10: sandbox workers so they can write only their own worktree folder. The conductor commits for
-  them, so they don't need to write to `.git` at all, and most tamper checks then become a second line of defence.
+  re-hashed. For step 10 part 2: sandbox workers so they can write only their own worktree folder. The conductor
+  commits for them, so they don't need to write to `.git` at all, and most tamper checks then become a second line of
+  defence.
 - **The user's index:** only entries hidden from `git status` (skip-worktree, assume-unchanged) are watched. Ordinary
   staging is not reported, so the user can keep working during a run.
 - **Sparse checkouts** are refused with a clear message (the scope check needs every file in the worktree).
@@ -158,7 +211,7 @@ After that, one line each (details in PLAN.md):
   only run after `checkIntegrity` passed.
 - **Acceptance commands run the worker's code** (its tests) with the user's rights. On timeout their whole process tree
   is stopped; on Linux and macOS, processes they leave running are stopped too, but on Windows those need a Job
-  Object. Both belong with the sandbox in step 10.
+  Object. The same holds for workers (`runWorker`). Both belong with the sandbox in step 10 part 2.
 - **Fresh worktrees have no installed dependencies.** Task and check worktrees hold the committed files only, so
   acceptance commands must set up what they need (for example `npm ci` before `npm test`) until opt-in copying of
   ignored files exists (research §7.4; it belongs with the engines and briefs, steps 10–11).
@@ -167,16 +220,16 @@ After that, one line each (details in PLAN.md):
   elsewhere (a two-way `read-tree -m -u`, which refuses rather than overwrites, and carries staged changes over;
   `git merge` would refuse any staged change, which the finalize checks allow away from the run's paths). The checks
   of step 8 run again just before it, since time passes while the user decides.
-- **The run folder is only as safe as the user's account** until workers are sandboxed (step 10). The store refuses
-  links, damaged files and any state its own steps could not have produced (the plan's hash and a setup hash over the
-  whole of `plan.json`, repeated in `state.json`; each review replayed through the review rules with the run's own
-  settings; each task's status against its record; merge order against dependencies; the integration tip), but a
-  worker that rewrites `plan.json` and `state.json` consistently is not detected: the hashes are not secrets. Every later git step checks
-  the repository again for itself, and the finalize approval (step 13) must compare the plan hash with the one the
-  user approved, held outside the run folder.
+- **The run folder is only as safe as the user's account** until workers are sandboxed (step 10 part 2). The store
+  refuses links, damaged files and any state its own steps could not have produced (the plan's hash and a setup hash
+  over the whole of `plan.json`, repeated in `state.json`; each review replayed through the review rules with the run's
+  own settings; each task's status against its record; merge order against dependencies; the integration tip), but a
+  worker that rewrites `plan.json` and `state.json` consistently is not detected: the hashes are not secrets. Every
+  later git step checks the repository again for itself, and the finalize approval (step 13) must compare the plan hash
+  with the one the user approved, held outside the run folder.
 - **Races on Orchestra's own folders:** the store checks every folder with lstat before writing and never deletes
   through a link, but a process that swaps a folder for a link between that check and the write is not stopped (Node
-  has no `openat`). The worktree manager has the same limit. The sandbox (step 10) closes it.
+  has no `openat`). The worktree manager has the same limit. The sandbox (step 10 part 2) closes it.
 - **Secrets a worker prints** are stored as printed in its output file (`worker-<round>.out`/`.err`). Acceptance
   commands get an allowlisted environment, and the store never reads environment variables or credentials.
 - **One writer per run:** the store refuses to open a run twice in one process. A lock between processes belongs to
@@ -204,7 +257,15 @@ Ask the owner only when the work needs the answer, one question at a time.
 - **Approval pop-up:** the owner said the user allows whatever they want. Confirm whether they still want a start/finalize confirmation before building step 13.
 - **Even split:** hard (current: each engine gets ⌊N/K⌋ or ⌈N/K⌉) or soft.
 - **Replanning:** may the orchestrator change the plan alone when a worker is blocked?
-- **Claude CLI:** the owner's CLI is 2.1.97. Upgrading to ≥ 2.1.325 fixes several bugs that matter ([research §5.1](research.md#51-claude-code-worker)).
+- **Claude CLI:** the owner's CLI is 2.1.97. Detection refuses Claude Code older than 2.1.101 (before it, the flag
+  workers start with could delete conversation history older than 30 days), so Claude workers need an update, or a
+  lower floor in the config at that risk. 2.1.325 or later is recommended ([research §5.1](research.md#51-claude-code-worker)).
+- **Worker tools:** Claude workers have no shell by default (PLAN §4), while the owner said the user decides what
+  agents may do. Keep the shell off unless a run allows it (`shell`), or allow it by default? On native Windows a
+  Claude worker's commands are not sandboxed until step 10 part 2.
+- **Containment dependencies (step 10 part 2):** the Windows Job Object needs a small native library (for example
+  `koffi`), and a Windows sandbox would use Microsoft's MXC SDK (its required telemetry can't be turned off). Confirm
+  before either is added.
 - **Files changed both by the user and by the run** (on the user's branch while the run was going): finalize checks
   currently allow them when git merges them cleanly and the tests pass on the merged result, and list them in the
   report. The stricter option refuses any such file. Confirm with the owner.

@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–9 done; step 10 next (2026-11-21). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) next (2026-11-21). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -47,8 +47,13 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Replanning | Needs your re-approval whenever ownership widens or tasks are added |
 | Worktrees | Outside the repo: `<ORCHESTRA_HOME>/wt/<runId>/<taskId>` (`ORCHESTRA_HOME` defaults to `~/.orchestra`), locked for their whole life |
 | Run folder | Outside the repo: `<ORCHESTRA_HOME>/runs/<runId>`. The approved plan and its hash, the run's state, the last finalize report, and a log of the conductor's decisions (JSON Lines, capped at 4 MiB). Per task and review round: the worker's output (capped at 8 MiB per stream), the gate with each acceptance command's output, and the diff of the task's commit (capped at 4 MiB). Caps keep the start and the end, with a marker where something was left out (a diff keeps its start); a gate or finalize report too large for its file has its command outputs cut to fit. Written atomically; no links; everything read back is checked against its schema and the plan. Kept until you remove it. |
-| Claude workers | Project rules only (`--setting-sources project`). No project hooks, no MCP servers, no shell unless the task opts in. |
-| Claude CLI | Upgrade recommended (≥ 2.1.325); the adapter gates features on the detected version |
+| Claude workers | `claude -p` in `acceptEdits` mode: edits inside its worktree; anything else needs approval, which a headless run refuses. Orchestra adds no allow rules. Project rules only (`--setting-sources project`). No hooks (`disableAllHooks`, given inline, never as a file), no MCP servers (`--strict-mcp-config`), no shell unless the run allows it (`shell`: Bash, PowerShell, Monitor). The run fails unless Claude's init event reports subscription billing, `acceptEdits`, no MCP servers, its worktree and (shell off) no shell tool; a missing field fails it too. |
+| Codex workers | `codex exec` in its `workspace-write` sandbox (writes only in the worktree and temp folders, `.git` read-only, no network), without your `config.toml` (`--ignore-user-config`), execpolicy rules, hooks, apps or plugins |
+| Antigravity workers | `agy` in `accept-edits` mode with `--sandbox`, on your Gemini API key only: detection refuses `agy` on a Google sign-in. Least verified lane (from docs, not runs) |
+| Worker environment | The acceptance allowlist plus where each CLI keeps its sign-in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the Linux session bus). Billing variables (Anthropic, Codex/OpenAI and Google keys, base URLs, Bedrock/Vertex switches) are never passed, even when allowed in the config; Antigravity workers get `GEMINI_API_KEY` on purpose. The brief goes on stdin. |
+| Engine detection | At the start of every run: installed, version read, and signed in through each CLI's own status command (Claude `authMethod: "claude.ai"`, Codex "Logged in using ChatGPT", `agy` in API-key mode). Credential files are never opened. |
+| Claude CLI | Workers need ≥ 2.1.101 (before it, `--setting-sources project` could delete conversation history older than 30 days); detection refuses older versions. ≥ 2.1.325 recommended (a warning below it). The floor is a config value. |
+| Agent config folders | Compared before and after each worker: settings, rule files, hooks, sub-agents, commands, skills, plugin lists, MCP and hook configs, Claude's automatic memory and scripts at the top of `~/.claude`, `~/.codex`, `~/.agents`, `~/.gemini`; links are followed. Sign-in files are never opened. Any change is reported. |
 | Internal commits on `orchestra/*` | "Orchestra" identity, never signed. Your repository's git hooks don't run on Orchestra's internal steps (worktree creation, branch moves, internal commits). **This is a config value; whether hooks should run is still your call.** |
 | Review | Deterministic checks first, then the orchestrator's review; no auto-accept. Accepting needs every acceptance criterion graded "pass" with evidence and no blocker or major finding. |
 | Merging | One accepted task at a time, in dependency order, into `orchestra/<runId>/integration`. Refused, never half-done, when another task changed the same file since it started or on any conflict. No rename detection; Orchestra identity, both parents. |
@@ -77,7 +82,8 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 7 | Merge plumbing (`merge-tree --write-tree`, `commit-tree`, compare-and-swap `update-ref`) | ☁ | done |
 | 8 | Finalize checks | ☁ | done |
 | 9 | Run store (run folder layout) | ☁ | done |
-| 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines | ☁ then 🖥 | |
+| 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines; worker runs into the run folder; agent config folders compared | ☁ | done (part 1) |
+| 10b | Containment: an OS sandbox around each whole worker (only its worktree writable), a Windows Job Object for leftover processes; the engine flags checked on your machine | 🖥 | |
 | 11 | Rules manifest + brief builder | ☁ | |
 | 12 | Daemon (lazy start, token, crash recovery) | ☁ | |
 | 13 | Approval dialog | 🖥 | |
