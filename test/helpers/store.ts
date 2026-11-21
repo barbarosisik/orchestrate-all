@@ -1,6 +1,7 @@
 /** Sample plans, records and review states for run store tests. Pure data: no repository needed. */
 
 import { sha256Of } from '../../src/plan/hash.js';
+import type { EngineName } from '../../src/plan/schema.js';
 import type { ReadyPlan } from '../../src/repo/checks.js';
 import { newTaskReview, recordGate, recordReview, startRevision, type TaskReview } from '../../src/review/state.js';
 import type { PlanRecord } from '../../src/store/schema.js';
@@ -16,6 +17,8 @@ export interface SampleTask {
   readonly criteria?: string[];
   readonly commands?: string[][];
   readonly owns?: string[];
+  readonly engine?: EngineName;
+  readonly model?: string;
 }
 
 export function samplePlan(tasks: readonly SampleTask[], baseSha = BASE, repo = '/repo'): ReadyPlan['plan'] {
@@ -31,8 +34,8 @@ export function samplePlan(tasks: readonly SampleTask[], baseSha = BASE, repo = 
       kind: 'work',
       mode: 'write',
       brief: `Do ${t.id}.`,
-      engine: 'claude',
-      model: 'test-model',
+      engine: t.engine ?? 'claude',
+      model: t.model ?? 'test-model',
       owns: t.owns ?? [`src/${t.id}/`],
       dependsOn: t.dependsOn ?? [],
       acceptance: { commands: t.commands ?? [], criteria: t.criteria ?? ['works'] },
