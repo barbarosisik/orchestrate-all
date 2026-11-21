@@ -67,6 +67,12 @@ describe('recordGate', () => {
     expect(failed.attempts[0]?.gate).toEqual({ passed: false, summary: '0/1 commands passed' });
   });
 
+  it('keeps only the summary of a full gate result (the run store saves the rest)', () => {
+    const fresh = newTaskReview(task, { maxRevisionRounds: 2 });
+    const gateResult = { passed: true, summary: '1/1 commands passed', acceptance: { passed: true, commands: [] }, added: ['dist/x.js'] };
+    expect(ok(recordGate(fresh, gateResult)).attempts[0]?.gate).toEqual({ passed: true, summary: '1/1 commands passed' });
+  });
+
   it('only records a gate while the worker is working', () => {
     expect(code(recordGate(awaiting(), { passed: true, summary: 'again' }))).toBe('wrong-status');
   });

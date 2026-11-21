@@ -98,10 +98,14 @@ export function newTaskReview(
   };
 }
 
-/** Records the deterministic gate's result for the current attempt. */
+/**
+ * Records the deterministic gate's result for the current attempt. A full GateResult may be passed; only its
+ * pass/fail and summary are kept here (the run store saves the whole result separately).
+ */
 export function recordGate(state: TaskReview, gate: GateSummary): Transition {
   if (state.status !== 'working') return wrongStatus(state, 'record a gate result');
-  return { ok: true, state: withCurrent(state, gate.passed ? 'awaiting-review' : 'gate-failed', { gate }) };
+  const summary: GateSummary = { passed: gate.passed, summary: gate.summary };
+  return { ok: true, state: withCurrent(state, gate.passed ? 'awaiting-review' : 'gate-failed', { gate: summary }) };
 }
 
 /** Why a review doesn't grade the task's criteria exactly once each, or null. */
