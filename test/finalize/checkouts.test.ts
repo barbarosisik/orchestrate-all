@@ -110,7 +110,10 @@ describe('checkTargetCheckouts', () => {
     writeFileSync(join(path, 'src/api/new.ts'), 'mine\n');
     const result = await checkTargetCheckouts({ ...fx.ctx, caseInsensitivePaths: true }, 'main', CHANGED);
     expect(result.checkouts).toEqual([path]);
-    expect(result.problems).toMatchObject([{ code: 'unsaved-work', checkout: path, paths: ['src/api/new.ts'] }]);
+    // On a case-sensitive file system refs/heads/Main has no file behind it, so git also lists the committed
+    // files as new there; the user's own file is flagged either way.
+    expect(result.problems).toMatchObject([{ code: 'unsaved-work', checkout: path }]);
+    expect(result.problems[0]?.paths).toContain('src/api/new.ts');
   });
 
   it('finds the main checkout when the repository was opened from a linked worktree', async () => {
