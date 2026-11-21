@@ -33,18 +33,20 @@ treat it as background only: where it disagrees with this file or PLAN.md, these
 | Step 5: scope check and the conductor's commit (re-hashed trees, private index, path rules, compare-and-swap, post-commit re-check) | `src/scope/`, `src/git/objects.ts` |
 | Git calls: git found by full path in PATH (never the current folder), no replacement objects or commit-graph, hooks folder always named | `src/git/run.ts`, `src/git/context.ts` |
 | Step 6: acceptance runner (no shell, PATH-only programs, safe Windows `.cmd` handling, allowlisted environment, time limits that stop the whole process tree, capped output), the gate (commands, then integrity and scope again) and the review state (threshold and revision rounds in code) | `src/accept/`, `src/review/`, `src/os/` |
-| Tests: 511 passing on macOS (2 more run only on Windows); CI runs Windows + Linux (Node 22 and 24) | `test/`, `.github/workflows/ci.yml` |
+| Step 7: merging (accepted tasks one at a time into `orchestra/<runId>/integration`: re-hashed inputs, scope re-checked, overlap refused, `merge-tree` without rename detection, exactly tip plus the task's changes, compare-and-swap, re-check) | `src/merge/` |
+| Tests: 529 passing on macOS (2 more run only on Windows); CI runs Windows + Linux (Node 22 and 24) | `test/`, `.github/workflows/ci.yml` |
 
-**CI** runs on pull requests and on pushes to `main`. Steps 3–5 went into `dev` through PR #1, green on Windows and
-Linux (the first Windows run found two test-only problems: git's `C:/` paths and hidden `.git` files). Step 6 is on
-`feat/acceptance-review`, with its PR into `dev`.
+**CI** runs on pull requests and on pushes to `main`. Steps 3–5 went into `dev` through PR #1 and step 6 through PR #2,
+both green on Windows and Linux (their first runs found test-only problems: git's `C:/` paths, hidden `.git` files,
+Linux running a script without `#!` through `sh`, a Windows folder held by a test's process). Step 7 is on
+`feat/merge`, with its PR into `dev`.
 
 **Review:** an independent review of steps 3–5 found 9 problems (a `git.exe` planted in a worktree, task branches turned
 into links to the user's branch, rewritten git objects, unwatched included config, links in Orchestra's folders, a
 relative hooks path, per-worktree config copied by git, a split git-folder layout, hidden index entries). All are fixed
 and each has a test. Reftable repositories also work now (HEADs are read through git).
 
-### How steps 3–6 fit together (for the run manager later)
+### How steps 3–7 fit together (for the run manager later)
 
 1. `createTaskWorktree(ctx, { runId, taskId, startSha })`: `startSha` comes from `startCommitFor(task, baseSha, integrationTip)`.
 2. `takeBaseline(ctx)` before the worker starts.
@@ -57,34 +59,37 @@ and each has a test. Reftable repositories also work now (HEADs are read through
 7. Review: `newTaskReview(task, { maxRevisionRounds })`, `recordGate(state, gate)`, then `recordReview(state, json)` with
    the orchestrator's review. On "needs-revision": `startRevision(state)`, give the worker `revisionRequest(state)` and
    go back to step 2 (new baseline; the expected tip is now the task commit).
-8. `removeTaskWorktree(ctx, wt, { deleteBranchAt })` when the run is finished or discarded.
+8. Merging: `startIntegration(ctx, runId, baseSha)` once per run; then, for each id from
+   `readyToMerge(tasks, accepted, merged)`, `mergeTask(ctx, { runId, task, start: wt.startSha, commit, expectedTip })`.
+   A refused merge (overlap, conflict) changes nothing; the task goes back to review (revise or replan).
+9. `removeTaskWorktree(ctx, wt, { deleteBranchAt })` when the run is finished or discarded; `removeIntegration` to
+   discard the run's integration branch.
 
 `ctx` comes from `repoContext(readyPlan)`. All git goes through `src/git/run.ts` via `repoGit`/`worktreeGit`, which name
 the git folder explicitly and turn hooks off unless the user allows them.
 
-## Next: step 7, merging
+## Next: step 8, finalize checks
 
-Merge accepted tasks, one at a time and in dependency order, into the run's integration branch
-`orchestra/<runId>/integration` (created at the base commit). Dependent tasks then start from its tip
-(`startCommitFor`).
+Everything that must hold before the integration branch may go into the user's branch (the merge itself, with the
+user's identity and hooks, comes with the approval in step 13).
 
 - **What:**
-  - `git merge-tree --write-tree --merge-base=<task's start commit> <integration tip> <task commit>` against the
-    repository (never inside a worktree), with an explicit merge base.
-  - Judge the result by `merge-tree`'s **exit code**, not its conflict list (git's docs: an empty list doesn't mean a
-    clean merge). A conflict sends the task back (revise or replan), never to a half-merged state.
-  - Re-hash the result tree (`git/objects.ts`), commit it with `commit-tree` (Orchestra identity, both parents, no
-    hooks, never signed) and move the integration branch with compare-and-swap `update-ref --no-deref`.
-  - Check that the merge changed only paths the task owns (the ownership rules make other changes impossible unless
-    something is wrong).
-  - Re-run the merged tasks' acceptance commands on the integration result, in an integration worktree.
-- **Watch out:** `merge-tree --write-tree` needs Git 2.38 or later; tasks that may overlap (ordered mode) must merge in
-  dependency order.
-- **Tests:** throwaway repos: clean merges, conflicts, a branch that moved (compare-and-swap), dependency order.
+  - An integration worktree (`<home>/wt/<runId>/integration`, locked, Orchestra's own) at the integration tip, moved
+    forward after each merge.
+  - Re-run every merged task's acceptance commands there, on the combined result, with the step 6 gate (integrity
+    and scope checks after the commands). Tasks that pass alone can still break together.
+  - The user's target branch: still where the plan's base commit was, or else a preview with
+    `merge-tree --write-tree` of the target tip and the integration tip that must be clean.
+  - Nothing of the user's would be overwritten: no unsaved work in the main checkout under any path the run changed
+    (step 2's check, run again now), and the target branch not checked out with a dirty index elsewhere.
+  - A finalize report: tasks, commits, files changed, acceptance results, what the user is about to approve.
+- **Watch out:** the integration worktree is Orchestra's, so the reserved task id `integration` can't clash with a
+  task; the run's integrity baseline must not treat it as the user's worktree.
+- **Tests:** throwaway repos: a moved target branch (clean and conflicting), unsaved user work under a changed path,
+  tasks that pass alone but fail together.
 
 After that, one line each (details in PLAN.md):
 
-8. **Finalize checks:** before merging into the user's branch, make sure nothing of theirs would be overwritten.
 9. **Run store:** save plan, prompts, logs, diffs, timings and tokens per run (run ids already exist: `src/run/names.ts`).
 10. **Engines:** detect which of Claude, Codex and Antigravity are ready, and drive each one locked down (fake engines in tests).
 11. **Rules and briefs:** find each project's rule files and write each worker's brief from a fixed template.
@@ -93,7 +98,7 @@ After that, one line each (details in PLAN.md):
 14. **Front doors:** the `/orchestrate-all` skill plus the MCP connection for Claude Code and Codex, and an installer.
 15. **Real-world test:** on the owner's machine, then a full demo.
 
-## Not covered yet by steps 3–6
+## Not covered yet by steps 3–7
 
 - **Checks beyond the repository.** Research §7.5 also asks to compare the user's main checkout files and the agents'
   own config folders (`~/.claude`, `~/.codex`, `~/.gemini`) before and after each worker. Only git's own config and
@@ -117,6 +122,7 @@ After that, one line each (details in PLAN.md):
 - **Acceptance commands run the worker's code** (its tests) with the user's rights. On timeout their whole process tree
   is stopped; on Linux and macOS, processes they leave running are stopped too, but on Windows those need a Job
   Object. Both belong with the sandbox in step 10.
+- **After merging:** acceptance commands are not yet re-run on the combined result (step 8).
 
 ## Open decisions
 

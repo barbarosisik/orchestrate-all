@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–6 done; step 7 next (2026-11-21). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–7 done; step 8 next (2026-11-21). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -50,6 +50,7 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Claude CLI | Upgrade recommended (≥ 2.1.325); the adapter gates features on the detected version |
 | Internal commits on `orchestra/*` | "Orchestra" identity, never signed. Your repository's git hooks don't run on Orchestra's internal steps (worktree creation, branch moves, internal commits). **This is a config value; whether hooks should run is still your call.** |
 | Review | Deterministic checks first, then the orchestrator's review; no auto-accept. Accepting needs every acceptance criterion graded "pass" with evidence and no blocker or major finding. |
+| Merging | One accepted task at a time, in dependency order, into `orchestra/<runId>/integration`. Refused, never half-done, when another task changed the same file since it started or on any conflict. No rename detection; Orchestra identity, both parents. |
 | Finalize | Merge commit into your branch, with your identity and hooks |
 | Limits | 3 parallel workers; 30 minutes per task; 10 minutes per acceptance command; 2 revision rounds per task |
 | Acceptance commands | Run by the conductor without a shell; programs found in PATH only, never in the worktree. On Windows, npm and npx run through node, and other `.cmd`/`.bat` files only with arguments cmd.exe can't act on. They get an allowlisted environment (no API keys or tokens) plus `CI=true`. Output is kept up to 256 KiB per stream. |
@@ -71,7 +72,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 4 | Integrity checks (`.git` pointer, refs, `HEAD`, nested git metadata) | ☁ | done |
 | 5 | Scope checker (`-z`, `--no-renames`, ignored files, post-commit re-check) | ☁ | done |
 | 6 | Acceptance runner + review state | ☁ | done |
-| 7 | Merge plumbing (`merge-tree --write-tree`, `commit-tree`, compare-and-swap `update-ref`) | ☁ | |
+| 7 | Merge plumbing (`merge-tree --write-tree`, `commit-tree`, compare-and-swap `update-ref`) | ☁ | done |
 | 8 | Finalize checks | ☁ | |
 | 9 | Run store (run folder layout) | ☁ | |
 | 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines | ☁ then 🖥 | |
