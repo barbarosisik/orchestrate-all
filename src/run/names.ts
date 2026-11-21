@@ -7,7 +7,9 @@
 import { randomBytes } from 'node:crypto';
 import { isWindowsDeviceName } from '../plan/paths.js';
 import { TASK_ID_PATTERN } from '../plan/schema.js';
-import { RESERVED_TASK_IDS } from '../plan/validate.js';
+import { RESERVED_TASK_IDS, RUN_BRANCH_NAMES, type RunBranchName } from '../plan/validate.js';
+
+export { RUN_BRANCH_NAMES, type RunBranchName } from '../plan/validate.js';
 
 export const BRANCH_NAMESPACE = 'orchestra';
 export const MAX_RUN_ID_LENGTH = 32;
@@ -42,6 +44,15 @@ export function taskBranch(runId: string, taskId: string): string {
 
 export function branchRef(branch: string): string {
   return `refs/heads/${branch}`;
+}
+
+export function isRunBranchName(name: string): name is RunBranchName {
+  return (Object.values(RUN_BRANCH_NAMES) as string[]).includes(name);
+}
+
+/** The run's own branches: `orchestra/<runId>/integration` and `orchestra/<runId>/finalize`. */
+export function runBranch(runId: string, name: RunBranchName): string {
+  return taskBranch(runId, name);
 }
 
 /** Every ref Orchestra creates lives under this prefix. */

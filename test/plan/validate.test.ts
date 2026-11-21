@@ -150,8 +150,9 @@ describe('validatePlan: identity', () => {
     expect(codesOf(plan([task('api'), task('api', { owns: ['src/other/'] })]))).toContain('duplicate-id');
   });
 
-  it('rejects the reserved id "integration"', () => {
+  it('rejects the ids Orchestra uses for its own branches', () => {
     expect(codesOf(plan([task('integration')]))).toContain('reserved-id');
+    expect(codesOf(plan([task('finalize')]))).toContain('reserved-id');
   });
 
   it('rejects ids that Windows reserves for devices, since ids become folder names', () => {

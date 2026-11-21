@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   branchRef,
+  isRunBranchName,
   isValidRunId,
   isValidTaskId,
   MAX_RUN_ID_LENGTH,
   newRunId,
   ORCHESTRA_REF_PREFIX,
+  runBranch,
   taskBranch,
 } from '../../src/run/names.js';
 
@@ -46,6 +48,7 @@ describe('isValidTaskId', () => {
   it('follows the plan rules', () => {
     expect(isValidTaskId('api')).toBe(true);
     expect(isValidTaskId('integration')).toBe(false);
+    expect(isValidTaskId('finalize')).toBe(false);
     expect(isValidTaskId('aux')).toBe(false);
     expect(isValidTaskId('API')).toBe(false);
   });
@@ -56,5 +59,15 @@ describe('branch names', () => {
     expect(taskBranch('run1', 'api')).toBe('orchestra/run1/api');
     expect(branchRef(taskBranch('run1', 'api'))).toBe('refs/heads/orchestra/run1/api');
     expect(branchRef(taskBranch('run1', 'api')).startsWith(ORCHESTRA_REF_PREFIX)).toBe(true);
+  });
+});
+
+describe('run branches', () => {
+  it("names the run's own branches, which no task may use", () => {
+    expect(runBranch('run1', 'integration')).toBe('orchestra/run1/integration');
+    expect(runBranch('run1', 'finalize')).toBe('orchestra/run1/finalize');
+    expect(isRunBranchName('integration')).toBe(true);
+    expect(isRunBranchName('finalize')).toBe(true);
+    expect(isRunBranchName('api')).toBe(false);
   });
 });

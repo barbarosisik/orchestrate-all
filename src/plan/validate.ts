@@ -73,8 +73,15 @@ export type NormalizedPlan = Omit<PlanInput, 'baseSha'>;
 
 export type ValidationResult = { ok: true; plan: NormalizedPlan } | { ok: false; errors: ValidationError[] };
 
-/** Ids Orchestra uses for its own branches (`orchestra/<runId>/integration`). */
-export const RESERVED_TASK_IDS: ReadonlySet<string> = new Set(['integration']);
+/**
+ * Names Orchestra gives its own branches and worktrees in a run (`orchestra/<runId>/<name>`): where accepted
+ * tasks are merged, and where the result your branch would get is checked before you approve it.
+ */
+export const RUN_BRANCH_NAMES = { integration: 'integration', finalize: 'finalize' } as const;
+export type RunBranchName = (typeof RUN_BRANCH_NAMES)[keyof typeof RUN_BRANCH_NAMES];
+
+/** Task ids no plan may use: they would clash with Orchestra's own branches and folders. */
+export const RESERVED_TASK_IDS: ReadonlySet<string> = new Set(Object.values(RUN_BRANCH_NAMES));
 const BRANCH_FORBIDDEN_CHARS = /[\u0000- \u007f~^:?*[\\]/;
 
 function formatPath(path: readonly PropertyKey[]): string {
