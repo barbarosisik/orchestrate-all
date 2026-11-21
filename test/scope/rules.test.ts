@@ -10,6 +10,8 @@ function change(path: string, status: TreeChange['status'] = 'A', newMode = '100
     status,
     oldMode: status === 'A' ? '000000' : '100644',
     newMode: status === 'D' ? '000000' : newMode,
+    oldId: status === 'A' ? '0'.repeat(40) : 'a'.repeat(40),
+    newId: status === 'D' ? '0'.repeat(40) : 'b'.repeat(40),
   };
 }
 

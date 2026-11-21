@@ -18,10 +18,10 @@ describe('parseRawDiff', () => {
       [`:100644 120000 ${A} ${B} T`, 'line\nbreak'],
     );
     expect(parseRawDiff(output)).toEqual([
-      { path: 'src/new file.ts', status: 'A', oldMode: '000000', newMode: '100644' },
-      { path: 'bin/run', status: 'M', oldMode: '100644', newMode: '100755' },
-      { path: 'docs/café.md', status: 'D', oldMode: '100644', newMode: '000000' },
-      { path: 'line\nbreak', status: 'T', oldMode: '100644', newMode: '120000' },
+      { path: 'src/new file.ts', status: 'A', oldMode: '000000', newMode: '100644', oldId: Z, newId: A },
+      { path: 'bin/run', status: 'M', oldMode: '100644', newMode: '100755', oldId: A, newId: B },
+      { path: 'docs/café.md', status: 'D', oldMode: '100644', newMode: '000000', oldId: A, newId: Z },
+      { path: 'line\nbreak', status: 'T', oldMode: '100644', newMode: '120000', oldId: A, newId: B },
     ]);
   });
 

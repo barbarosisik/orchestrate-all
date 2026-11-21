@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ORCHESTRA_GIT_IDENTITY } from '../config/defaults.js';
 import { repoGit, worktreeGit, type RepoContext } from '../git/context.js';
+import { identityArgs, type CommitIdentity } from '../git/identity.js';
 import { readCommit, verifyTree, type ObjectProblem } from '../git/objects.js';
 import { describeGitFailure, LONG_GIT_TIMEOUT_MS, type GitResult } from '../git/run.js';
 import { fingerprintPath } from '../integrity/fingerprint.js';
@@ -33,7 +34,8 @@ import { entriesOverlap, parseOwnsEntry, toKey } from '../plan/paths.js';
 import { canonicalPath, samePath } from '../repo/canonical.js';
 import { checkWorktreeLinks } from '../worktree/links.js';
 import type { TaskWorktree } from '../worktree/manager.js';
-import { parseRawDiff, type TreeChange } from './diff.js';
+import type { TreeChange } from './diff.js';
+import { diffTrees, treePaths } from './trees.js';
 import { DEFAULT_SCOPE_RULES, evaluateScope, type ScopeRules, type ScopeTask, type ScopeViolation } from './rules.js';
 
 export interface IgnoredPath {
@@ -75,7 +77,6 @@ export interface ScopeOptions {
 }
 
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const DIFF_ARGS = ['diff-tree', '-r', '-z', '--raw', '--no-renames', '--no-ext-diff', '--no-textconv'] as const;
 
 function scopeError(code: ScopeErrorCode, message: string): ScopeCheck {
   return { ok: false, error: { code, message } };
@@ -92,11 +93,6 @@ function objectError(found: ObjectProblem): ScopeCheck {
 
 function nulList(output: string): string[] {
   return output.split('\u0000').filter((item) => item.length > 0);
-}
-
-async function treePaths(ctx: RepoContext, treeish: string): Promise<string[] | GitResult> {
-  const result = await repoGit(ctx, ['ls-tree', '-r', '-z', '--name-only', '--full-tree', treeish]);
-  return result.code === 0 ? nulList(result.stdout) : result;
 }
 
 /** Problems that would make git in this worktree read something other than the task's own setup. */
@@ -159,14 +155,14 @@ export async function checkScope(
   // Trees git already had under these ids are kept as they are, so the new tree is checked too.
   const treeChecked = await verifyTree(ctx, tree, verified);
   if (!treeChecked.ok) return objectError(treeChecked.problem);
-  const diff = await repoGit(ctx, [...DIFF_ARGS, fromTree, tree]);
-  if (diff.code !== 0) return gitError('diff-tree', diff);
-  const changes = parseRawDiff(diff.stdout);
+  const diff = await diffTrees(ctx, fromTree, tree);
+  if (!diff.ok) return scopeError('git-failed', diff.message);
+  const { changes } = diff;
   let paths: string[] = [];
   if (changes.some((c) => c.status === 'A')) {
     const listed = await treePaths(ctx, tree);
-    if (!Array.isArray(listed)) return gitError('ls-tree', listed);
-    paths = listed;
+    if (!listed.ok) return scopeError('git-failed', listed.message);
+    paths = listed.paths;
   }
   const violations = evaluateScope(task, changes, opts.rules ?? DEFAULT_SCOPE_RULES, paths);
 
@@ -186,10 +182,7 @@ export async function checkScope(
   };
 }
 
-export interface CommitIdentity {
-  readonly name: string;
-  readonly email: string;
-}
+export type { CommitIdentity } from '../git/identity.js';
 
 export interface CommitOptions {
   readonly message: string;
@@ -214,11 +207,6 @@ export function taskCommitMessage(runId: string, task: { readonly id: string; re
   return `${title}\n\nOrchestra-Run: ${runId}\nOrchestra-Task: ${task.id}\n`;
 }
 
-function identityArgs(id: CommitIdentity): string[] {
-  // author.* and committer.* outrank user.* in the user's own config; user.* covers older git.
-  return ['user', 'author', 'committer'].flatMap((who) => ['-c', `${who}.name=${id.name}`, '-c', `${who}.email=${id.email}`]);
-}
-
 /** Reads the new commit back and checks it again. Returns what is wrong, or null. */
 async function recheck(
   ctx: RepoContext,
@@ -241,14 +229,14 @@ async function recheck(
     const checked = await verifyTree(ctx, tree, verified);
     if (!checked.ok) return checked.problem.message;
   }
-  const diff = await repoGit(ctx, [...DIFF_ARGS, report.fromTree, report.tree]);
-  if (diff.code !== 0) return `git diff-tree failed: ${describeGitFailure(diff)}`;
-  const changes = parseRawDiff(diff.stdout);
-  const listed = changes.some((c) => c.status === 'A') ? await treePaths(ctx, report.tree) : [];
-  if (!Array.isArray(listed)) return `git ls-tree failed: ${describeGitFailure(listed)}`;
-  const violations = evaluateScope(task, changes, rules, listed);
+  const diff = await diffTrees(ctx, report.fromTree, report.tree);
+  if (!diff.ok) return diff.message;
+  const { changes } = diff;
+  const listed = changes.some((c) => c.status === 'A') ? await treePaths(ctx, report.tree) : { ok: true as const, paths: [] };
+  if (!listed.ok) return listed.message;
+  const violations = evaluateScope(task, changes, rules, listed.paths);
   if (violations.length > 0) return `The commit fails the scope check: ${violations.map((v) => v.message).join(' ')}`;
-  const key = (c: TreeChange): string => `${c.status} ${c.newMode} ${c.path}`;
+  const key = (c: TreeChange): string => `${c.status} ${c.newMode} ${c.newId} ${c.path}`;
   const expected = report.changes.map(key).sort().join('\n');
   if (changes.map(key).sort().join('\n') !== expected) return "The commit's changes differ from the checked ones.";
   return null;

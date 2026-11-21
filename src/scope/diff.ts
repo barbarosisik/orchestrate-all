@@ -11,6 +11,9 @@ export interface TreeChange {
   readonly oldMode: string;
   /** "000000" when deleted; "120000" is a symlink, "160000" a nested repository (gitlink). */
   readonly newMode: string;
+  /** Object ids before and after; all zeros on the side where the path doesn't exist. */
+  readonly oldId: string;
+  readonly newId: string;
 }
 
 const STATUSES: ReadonlySet<string> = new Set(['A', 'D', 'M', 'T']);
@@ -27,7 +30,14 @@ export function parseRawDiff(output: string): TreeChange[] {
     if (fields.length !== 5 || status === undefined || !STATUSES.has(status) || path === undefined || path.length === 0) {
       throw new Error(`Unexpected git diff entry: ${meta.slice(0, 80)}`);
     }
-    changes.push({ path, status: status as ChangeStatus, oldMode: fields[0] as string, newMode: fields[1] as string });
+    changes.push({
+      path,
+      status: status as ChangeStatus,
+      oldMode: fields[0] as string,
+      newMode: fields[1] as string,
+      oldId: fields[2] as string,
+      newId: fields[3] as string,
+    });
     i += 1;
   }
   return changes;
