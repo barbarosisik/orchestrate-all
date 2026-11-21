@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–5 done; step 6 next (2026-11-20). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–6 done; step 7 next (2026-11-21). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -49,9 +49,10 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Claude workers | Project rules only (`--setting-sources project`). No project hooks, no MCP servers, no shell unless the task opts in. |
 | Claude CLI | Upgrade recommended (≥ 2.1.325); the adapter gates features on the detected version |
 | Internal commits on `orchestra/*` | "Orchestra" identity, never signed. Your repository's git hooks don't run on Orchestra's internal steps (worktree creation, branch moves, internal commits). **This is a config value; whether hooks should run is still your call.** |
-| Review | Deterministic checks first, then the orchestrator's review; no auto-accept |
+| Review | Deterministic checks first, then the orchestrator's review; no auto-accept. Accepting needs every acceptance criterion graded "pass" with evidence and no blocker or major finding. |
 | Finalize | Merge commit into your branch, with your identity and hooks |
-| Limits | 3 parallel workers; 30 minutes per task |
+| Limits | 3 parallel workers; 30 minutes per task; 10 minutes per acceptance command; 2 revision rounds per task |
+| Acceptance commands | Run by the conductor without a shell; programs found in PATH only, never in the worktree. On Windows, npm and npx run through node, and other `.cmd`/`.bat` files only with arguments cmd.exe can't act on. They get an allowlisted environment (no API keys or tokens) plus `CI=true`. Output is kept up to 256 KiB per stream. |
 | Approval | A native Windows dialog shown by the conductor |
 | `.env` copying | Never, unless you opt in per repo |
 | Ignored files in a task's worktree | Listed in the scope report (marked when inside the task's owned paths), never committed, not counted as a violation |
@@ -69,7 +70,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 3 | Worktree manager with explicit git-dir and hardened git calls | ☁ | done |
 | 4 | Integrity checks (`.git` pointer, refs, `HEAD`, nested git metadata) | ☁ | done |
 | 5 | Scope checker (`-z`, `--no-renames`, ignored files, post-commit re-check) | ☁ | done |
-| 6 | Acceptance runner + review state | ☁ | |
+| 6 | Acceptance runner + review state | ☁ | done |
 | 7 | Merge plumbing (`merge-tree --write-tree`, `commit-tree`, compare-and-swap `update-ref`) | ☁ | |
 | 8 | Finalize checks | ☁ | |
 | 9 | Run store (run folder layout) | ☁ | |
