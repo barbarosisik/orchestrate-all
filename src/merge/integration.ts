@@ -1,7 +1,7 @@
 /**
  * Merging (step 7, safeguard 4). Accepted tasks go into the run's integration branch
  * `orchestra/<runId>/integration`, one at a time and in dependency order. The user's branch is untouched
- * until they finalize (step 8).
+ * until they approve the finalize (checked in step 8, finalize/check.ts; done with their approval in step 13).
  *
  * Each merge is plain plumbing against the repository, never inside a worktree:
  * 1. the integration tip, the task's start commit and its commit are read and re-hashed (git/objects.ts);
@@ -26,18 +26,51 @@ import { readCommit, verifyTree, type ObjectProblem } from '../git/objects.js';
 import { describeGitFailure } from '../git/run.js';
 import { toKey } from '../plan/paths.js';
 import type { Task } from '../plan/schema.js';
-import { branchRef, isValidRunId, taskBranch } from '../run/names.js';
+import { branchRef, isValidRunId, RUN_BRANCH_NAMES, runBranch } from '../run/names.js';
 import type { TreeChange } from '../scope/diff.js';
 import { DEFAULT_SCOPE_RULES, evaluateScope, type ScopeRules } from '../scope/rules.js';
 import { diffTrees, treePaths } from '../scope/trees.js';
 
 /** The integration branch's last name part. No task may use it as its id (plan/validate.ts). */
-export const INTEGRATION_NAME = 'integration';
+export const INTEGRATION_NAME = RUN_BRANCH_NAMES.integration;
 
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
+/**
+ * Merges never detect renames: a folder one side moved must not carry the other side's new files along.
+ * The preview of the merge into the user's branch (step 8) uses the same settings, and so must the real one.
+ */
+export const NO_RENAMES: readonly string[] = ['-c', 'merge.renames=false', '-c', 'merge.directoryRenames=false'];
+
 export function integrationBranch(runId: string): string {
-  return taskBranch(runId, INTEGRATION_NAME);
+  return runBranch(runId, INTEGRATION_NAME);
+}
+
+export type TreeMerge =
+  | { readonly status: 'clean'; readonly tree: string }
+  | { readonly status: 'conflict'; readonly paths: readonly string[] }
+  | { readonly status: 'failed'; readonly message: string };
+
+/**
+ * `git merge-tree --write-tree` of two commits with an explicit merge base and no rename detection. Its exit
+ * code decides between clean and conflicted (git's docs: an empty conflict list doesn't mean a clean merge).
+ */
+export async function mergeTrees(ctx: RepoContext, base: string, ours: string, theirs: string): Promise<TreeMerge> {
+  const merged = await repoGit(ctx, [
+    ...NO_RENAMES,
+    'merge-tree',
+    '--write-tree',
+    '-z',
+    '--name-only',
+    '--no-messages',
+    `--merge-base=${base}`,
+    ours,
+    theirs,
+  ]);
+  const tokens = merged.stdout.split('\u0000');
+  if (merged.code === 1) return { status: 'conflict', paths: tokens.slice(1).filter((t) => t.length > 0) };
+  if (merged.code !== 0) return { status: 'failed', message: `git merge-tree failed: ${describeGitFailure(merged)}` };
+  return { status: 'clean', tree: tokens[0] ?? '' };
 }
 
 export type MergeErrorCode =
@@ -194,28 +227,13 @@ export async function mergeTask(ctx: RepoContext, input: MergeInput): Promise<Me
   }
 
   // 4. The merge itself; its exit code decides.
-  const merged = await repoGit(ctx, [
-    // No rename detection: a folder the integration branch moved must not carry the task's new files along.
-    '-c',
-    'merge.renames=false',
-    '-c',
-    'merge.directoryRenames=false',
-    'merge-tree',
-    '--write-tree',
-    '-z',
-    '--name-only',
-    '--no-messages',
-    `--merge-base=${start}`,
-    expectedTip,
-    commit,
-  ]);
-  const tokens = merged.stdout.split('\u0000');
-  if (merged.code === 1) {
-    const conflicts = tokens.slice(1).filter((t) => t.length > 0);
+  const merged = await mergeTrees(ctx, start, expectedTip, commit);
+  if (merged.status === 'conflict') {
+    const conflicts = merged.paths;
     return failure('conflict', `Merging task "${task.id}" conflicts in ${conflicts.join(', ') || 'some paths'}.`, conflicts);
   }
-  if (merged.code !== 0) return failure('git-failed', `git merge-tree failed: ${describeGitFailure(merged)}`);
-  const resultTree = tokens[0] ?? '';
+  if (merged.status === 'failed') return failure('git-failed', merged.message);
+  const resultTree = merged.tree;
   const resultChecked = await verifyTree(ctx, resultTree, verified);
   if (!resultChecked.ok) return objectFailure(resultChecked.problem);
 
