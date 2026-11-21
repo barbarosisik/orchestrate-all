@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–8 done; step 9 next (2026-11-21). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–9 done; step 10 next (2026-11-21). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -46,6 +46,7 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Task cap | 8 tasks per run |
 | Replanning | Needs your re-approval whenever ownership widens or tasks are added |
 | Worktrees | Outside the repo: `<ORCHESTRA_HOME>/wt/<runId>/<taskId>` (`ORCHESTRA_HOME` defaults to `~/.orchestra`), locked for their whole life |
+| Run folder | Outside the repo: `<ORCHESTRA_HOME>/runs/<runId>`. The approved plan and its hash, the run's state, the last finalize report, and a log of the conductor's decisions (JSON Lines, capped at 4 MiB). Per task and review round: the worker's output (capped at 8 MiB per stream), the gate with each acceptance command's output, and the diff of the task's commit (capped at 4 MiB). Caps keep the start and the end, with a marker where something was left out (a diff keeps its start); a gate or finalize report too large for its file has its command outputs cut to fit. Written atomically; no links; everything read back is checked against its schema and the plan. Kept until you remove it. |
 | Claude workers | Project rules only (`--setting-sources project`). No project hooks, no MCP servers, no shell unless the task opts in. |
 | Claude CLI | Upgrade recommended (≥ 2.1.325); the adapter gates features on the detected version |
 | Internal commits on `orchestra/*` | "Orchestra" identity, never signed. Your repository's git hooks don't run on Orchestra's internal steps (worktree creation, branch moves, internal commits). **This is a config value; whether hooks should run is still your call.** |
@@ -75,7 +76,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 6 | Acceptance runner + review state | ☁ | done |
 | 7 | Merge plumbing (`merge-tree --write-tree`, `commit-tree`, compare-and-swap `update-ref`) | ☁ | done |
 | 8 | Finalize checks | ☁ | done |
-| 9 | Run store (run folder layout) | ☁ | |
+| 9 | Run store (run folder layout) | ☁ | done |
 | 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines | ☁ then 🖥 | |
 | 11 | Rules manifest + brief builder | ☁ | |
 | 12 | Daemon (lazy start, token, crash recovery) | ☁ | |
