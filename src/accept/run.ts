@@ -13,8 +13,8 @@
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
-import { join } from 'node:path';
 import { DEFAULT_LIMITS } from '../config/defaults.js';
+import { OWN_PROCESS_GROUP, stopTree } from '../os/process-tree.js';
 import { commandEnv, type CommandEnvOptions } from './env.js';
 import { resolveCommand, type Launch } from './resolve.js';
 
@@ -113,29 +113,6 @@ export class OutputCapture {
 
 const EMPTY_OUTPUT: CapturedOutput = { text: '', totalBytes: 0, truncated: false };
 
-/** Stops a command and everything it started. */
-async function stopTree(pid: number, env: NodeJS.ProcessEnv): Promise<void> {
-  if (process.platform !== 'win32') {
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch {
-      // The group is already gone.
-    }
-    return;
-  }
-  const systemRoot = Object.entries(env).find(([k]) => k.toUpperCase() === 'SYSTEMROOT')?.[1] ?? process.env.SystemRoot;
-  if (systemRoot === undefined) return;
-  await new Promise<void>((done) => {
-    const killer = spawn(join(systemRoot, 'System32', 'taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
-      shell: false,
-      windowsHide: true,
-      stdio: 'ignore',
-    });
-    killer.on('error', () => done());
-    killer.on('close', () => done());
-  });
-}
-
 function notStarted(argv: readonly string[], program: string | null, error: string): CommandResult {
   return {
     argv,
@@ -150,7 +127,11 @@ function notStarted(argv: readonly string[], program: string | null, error: stri
   };
 }
 
-function launchCommand(
+/**
+ * Starts an already resolved program and waits for it, within the time limit, keeping its output up to
+ * `maxOutputBytes` per stream. Never throws: problems come back in the result.
+ */
+export function launchCommand(
   argv: readonly string[],
   launch: Launch,
   cwd: string,
@@ -176,7 +157,7 @@ function launchCommand(
         windowsHide: true,
         windowsVerbatimArguments: launch.windowsVerbatimArguments,
         // Its own process group on Linux and macOS, so the whole tree can be stopped.
-        detached: process.platform !== 'win32',
+        detached: OWN_PROCESS_GROUP,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -223,7 +204,7 @@ function launchCommand(
     child.on('exit', (code, signal) => {
       exit = { code, signal };
       // Anything the command left running is stopped (on Linux and macOS: its process group).
-      if (child.pid !== undefined && process.platform !== 'win32') void stopTree(child.pid, env);
+      if (child.pid !== undefined && OWN_PROCESS_GROUP) void stopTree(child.pid, env);
       grace = setTimeout(() => {
         child.stdout.destroy();
         child.stderr.destroy();

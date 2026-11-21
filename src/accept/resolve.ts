@@ -38,6 +38,11 @@ export interface ResolveOptions {
   readonly env: NodeJS.ProcessEnv;
   /** Defaults to this process's platform. */
   readonly platform?: NodeJS.Platform;
+  /**
+   * More npm shims to start as node + script on Windows, beyond npm's and npx's: the shim's file name (lower
+   * case) and its script, relative to the shim's folder.
+   */
+  readonly nodeScripts?: Readonly<Record<string, string>>;
 }
 
 /** Extensions Windows can start without a shell, and those that need cmd.exe. */
@@ -98,9 +103,10 @@ export function findProgramFile(name: string, opts: ResolveOptions): string | nu
   return null;
 }
 
-/** For npm.cmd / npx.cmd: node and the script, when Node's installer laid them out as usual. */
-function nodeScriptLaunch(file: string, args: readonly string[]): Launch | null {
-  const script = NODE_SCRIPTS[basename(file).toLowerCase()];
+/** For npm.cmd / npx.cmd (and `extra` shims): node and the script, when they are laid out as usual. */
+function nodeScriptLaunch(file: string, args: readonly string[], extra: Readonly<Record<string, string>> = {}): Launch | null {
+  const name = basename(file).toLowerCase();
+  const script = Object.hasOwn(NODE_SCRIPTS, name) ? NODE_SCRIPTS[name] : Object.hasOwn(extra, name) ? extra[name] : undefined;
   if (script === undefined) return null;
   const dir = dirname(file);
   const scriptPath = join(dir, script);
@@ -147,6 +153,6 @@ export function resolveCommand(argv: readonly string[], opts: ResolveOptions): R
   if ((opts.platform ?? process.platform) !== 'win32' || !BATCH_EXTENSIONS.has(extname(file).toLowerCase())) {
     return { ok: true, launch: { program: file, args, windowsVerbatimArguments: false } };
   }
-  const viaNode = nodeScriptLaunch(file, args);
+  const viaNode = nodeScriptLaunch(file, args, opts.nodeScripts);
   return viaNode !== null ? { ok: true, launch: viaNode } : batchLaunch(file, args, opts.env);
 }

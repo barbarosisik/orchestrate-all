@@ -90,7 +90,7 @@ export const DEFAULT_COMMAND_ENV: readonly string[] = [
 ];
 
 /** Name prefixes that are allowed too: locale settings and the XDG base folders. */
-const ALLOWED_PREFIXES = ['LC_', 'XDG_'] as const;
+export const DEFAULT_COMMAND_ENV_PREFIXES: readonly string[] = ['LC_', 'XDG_'];
 
 export interface CommandEnvOptions {
   /** More variable names to pass through (from the user's config). */
@@ -103,7 +103,7 @@ export function commandEnv(base: NodeJS.ProcessEnv = process.env, opts: CommandE
   for (const [key, value] of Object.entries(base)) {
     const upper = key.toUpperCase();
     if (value === undefined || upper.startsWith('GIT_')) continue;
-    if (allowed.has(upper) || ALLOWED_PREFIXES.some((prefix) => upper.startsWith(prefix))) env[key] = value;
+    if (allowed.has(upper) || DEFAULT_COMMAND_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))) env[key] = value;
   }
   env.CI = 'true';
   env.NO_COLOR = '1';
