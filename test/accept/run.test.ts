@@ -9,7 +9,8 @@ const NODE = process.execPath;
 const WINDOWS = process.platform === 'win32';
 const scratch: string[] = [];
 afterEach(() => {
-  while (scratch.length > 0) rmSync(scratch.pop() as string, { recursive: true, force: true });
+  // Retries: on Windows a process that was just stopped may still hold its folder for a moment.
+  while (scratch.length > 0) rmSync(scratch.pop() as string, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 function tempDir(): string {
@@ -123,22 +124,23 @@ describe('runCommand', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it('reports a file that is found but is not a program', async () => {
+  it('reports a file that is found but is not a program, without throwing', async () => {
     const dir = tempDir();
     const file = join(dir, WINDOWS ? 'bad.exe' : 'bad');
     writeFileSync(file, 'this is not a program\n');
     chmodSync(file, 0o755);
     const result = await runCommand(dir, [file]);
-    expect(result.status).toBe('not-started');
+    // macOS and Windows refuse to start it; Linux hands a file without "#!" to sh, which then fails.
+    expect(['not-started', 'failed']).toContain(result.status);
     expect(result.program).toBe(file);
-    expect(result.error).not.toBeNull();
   });
 
   it("doesn't wait forever for output a process outside the command's tree keeps open", async () => {
     // The child starts its own process group, so it survives the command, and keeps stdout open.
     const code =
       "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], " +
-      "{ detached: true, stdio: ['ignore', 'inherit', 'inherit'] }); console.log(c.pid); c.unref();";
+      "{ detached: true, cwd: require('node:os').tmpdir(), stdio: ['ignore', 'inherit', 'inherit'] }); " +
+      'console.log(c.pid); c.unref();';
     const result = await runCommand(tempDir(), node(code));
     try {
       expect(result.status).toBe('passed');
