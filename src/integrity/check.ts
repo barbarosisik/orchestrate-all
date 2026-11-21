@@ -211,7 +211,7 @@ function userRefs(refs: ReadonlyMap<string, RefInfo>): Record<string, string> {
 }
 
 /** An Orchestra worktree, by the path git recorded or by where that path really leads. */
-function isOrchestraCheckout(ctx: RepoContext, entry: WorktreeEntry): boolean {
+export function isOrchestraCheckout(ctx: RepoContext, entry: WorktreeEntry): boolean {
   const root = orchestraRoot(ctx);
   const ci = ctx.caseInsensitivePaths;
   return isInsidePath(entry.path, root, ci) || isInsidePath(canonicalPath(entry.path) ?? entry.path, root, ci);

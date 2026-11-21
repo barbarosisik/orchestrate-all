@@ -73,7 +73,7 @@ function spellingsByKey(treePaths: readonly string[]): Map<string, Set<string>> 
 }
 
 /** For each added path, the spellings it clashes with (itself or a parent folder), if any. */
-function caseCollisions(added: readonly string[], treePaths: readonly string[]): Map<string, string[]> {
+export function caseCollisions(added: readonly string[], treePaths: readonly string[]): Map<string, string[]> {
   const found = new Map<string, string[]>();
   if (added.length === 0) return found;
   const spellings = spellingsByKey(treePaths);
