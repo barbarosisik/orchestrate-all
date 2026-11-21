@@ -159,7 +159,8 @@ function launchCommand(
   maxOutputBytes: number,
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const started = Date.now();
+    // A monotonic clock: a system clock set back during a command must not give a negative time.
+    const started = performance.now();
     const stdout = new OutputCapture(maxOutputBytes);
     const stderr = new OutputCapture(maxOutputBytes);
     let timedOut = false;
@@ -197,7 +198,7 @@ function launchCommand(
         status,
         exitCode: code,
         signal: exit?.signal ?? null,
-        durationMs: Date.now() - started,
+        durationMs: Math.round(performance.now() - started),
         stdout: stdout.result(),
         stderr: stderr.result(),
         error: timedOut ? `Stopped after ${Math.round(timeoutMs / 1000)} s.` : error,
