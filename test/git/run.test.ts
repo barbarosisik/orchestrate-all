@@ -185,6 +185,24 @@ describe('runGitRaw', () => {
       const blob = r.git('hash-object', '-w', 'bin.dat');
       const result = await runGitRaw(['cat-file', 'blob', blob], { cwd: r.dir });
       expect(Buffer.compare(result.stdout, bytes)).toBe(0);
+      expect(result.truncated).toBe(false);
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  it('keeps only the start of the output when asked for at most so many bytes, and stops git', async () => {
+    const big = 'line of text\n'.repeat(50_000);
+    const r = makeRepo({ 'big.txt': big });
+    try {
+      const blob = r.git('rev-parse', 'HEAD:big.txt');
+      const capped = await runGitRaw(['cat-file', 'blob', blob], { cwd: r.dir, maxStdoutBytes: 1000 });
+      expect(capped.truncated).toBe(true);
+      expect(capped.stdout.toString('utf8')).toBe(big.slice(0, 1000));
+      const enough = await runGitRaw(['cat-file', 'blob', blob], { cwd: r.dir, maxStdoutBytes: big.length });
+      expect(enough.truncated).toBe(false);
+      expect(enough.code).toBe(0);
+      expect(enough.stdout.length).toBe(big.length);
     } finally {
       r.cleanup();
     }

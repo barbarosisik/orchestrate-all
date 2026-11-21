@@ -16,6 +16,8 @@ export interface GitResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly timedOut: boolean;
+  /** Stdout went past `maxStdoutBytes`: only its start was kept, and git was stopped. */
+  readonly truncated?: boolean;
 }
 
 /** Like GitResult, with stdout as raw bytes (for object contents). */
@@ -24,6 +26,7 @@ export interface RawGitResult {
   readonly stdout: Buffer;
   readonly stderr: string;
   readonly timedOut: boolean;
+  readonly truncated?: boolean;
 }
 
 export interface GitOptions {
@@ -42,6 +45,11 @@ export interface GitOptions {
    * conductor stage a worktree's content in a private index that no worker has touched.
    */
   readonly indexFile?: string;
+  /**
+   * Keep at most this many bytes of stdout (the start), then stop git. For output only shown to the user, such
+   * as a diff, which could otherwise be as large as the files it shows.
+   */
+  readonly maxStdoutBytes?: number;
 }
 
 export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
@@ -135,13 +143,27 @@ export function runGitRaw(args: readonly string[], opts: GitOptions): Promise<Ra
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
+    let outBytes = 0;
+    let truncated = false;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
     }, opts.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS);
 
-    child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+    const maxOut = opts.maxStdoutBytes ?? Infinity;
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (truncated) return;
+      if (outBytes + chunk.length > maxOut) {
+        out.push(chunk.subarray(0, maxOut - outBytes));
+        outBytes = maxOut;
+        truncated = true;
+        child.kill();
+        return;
+      }
+      out.push(chunk);
+      outBytes += chunk.length;
+    });
     child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
     child.stdin.on('error', () => undefined);
     child.on('error', (error) => {
@@ -150,7 +172,7 @@ export function runGitRaw(args: readonly string[], opts: GitOptions): Promise<Ra
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), timedOut });
+      resolve({ code, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), timedOut, truncated });
     });
 
     if (opts.input !== undefined) child.stdin.end(opts.input);
