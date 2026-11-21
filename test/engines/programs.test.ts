@@ -58,7 +58,8 @@ describe('engineLaunch', () => {
 
   it('uses an absolute program path from the config instead of PATH', () => {
     const elsewhere = tempDir();
-    const file = runnable(join(elsewhere, 'my-claude'));
+    // Windows starts only files with a program extension (PATHEXT).
+    const file = runnable(join(elsewhere, process.platform === 'win32' ? 'my-claude.exe' : 'my-claude'));
     const result = engineLaunch('claude', ['-p'], { cwd: tempDir(), env: { PATH: '' }, program: file });
     expect(result).toMatchObject({ ok: true, launch: { program: file, args: ['-p'] } });
   });
