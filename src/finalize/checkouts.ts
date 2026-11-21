@@ -30,7 +30,8 @@ import { branchRef } from '../run/names.js';
 import { findAdminDir, readControlLine } from '../worktree/links.js';
 import { listWorktrees } from '../worktree/manager.js';
 
-export type CheckoutProblemCode = 'unsaved-work' | 'operation-in-progress' | 'git-failed';
+export const CHECKOUT_PROBLEM_CODES = ['unsaved-work', 'operation-in-progress', 'git-failed'] as const;
+export type CheckoutProblemCode = (typeof CHECKOUT_PROBLEM_CODES)[number];
 
 export interface CheckoutProblem {
   readonly code: CheckoutProblemCode;

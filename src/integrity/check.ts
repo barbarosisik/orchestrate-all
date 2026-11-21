@@ -56,23 +56,25 @@ export interface IntegrityBaseline {
   readonly configFiles: Readonly<Record<string, string>>;
 }
 
-export type IntegrityViolationCode =
-  | 'worktree-folder'
-  | 'git-pointer'
-  | 'worktree-admin'
-  | 'worktree-head'
-  | 'worktree-config'
-  | 'worktree-unlocked'
-  | 'task-branch'
-  | 'nested-git'
-  | 'scan-incomplete'
-  | 'user-refs'
-  | 'user-checkouts'
-  | 'hidden-index'
-  | 'repo-files'
-  | 'user-worktrees'
-  | 'git-config-files'
-  | 'git-failed';
+export const INTEGRITY_VIOLATION_CODES = [
+  'worktree-folder',
+  'git-pointer',
+  'worktree-admin',
+  'worktree-head',
+  'worktree-config',
+  'worktree-unlocked',
+  'task-branch',
+  'nested-git',
+  'scan-incomplete',
+  'user-refs',
+  'user-checkouts',
+  'hidden-index',
+  'repo-files',
+  'user-worktrees',
+  'git-config-files',
+  'git-failed',
+] as const;
+export type IntegrityViolationCode = (typeof INTEGRITY_VIOLATION_CODES)[number];
 
 export interface IntegrityViolation {
   readonly code: IntegrityViolationCode;

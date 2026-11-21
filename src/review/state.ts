@@ -16,7 +16,8 @@
 
 import { ReviewSchema, type Review, type Severity } from './schema.js';
 
-export type ReviewStatus = 'working' | 'gate-failed' | 'awaiting-review' | 'needs-revision' | 'accepted' | 'rejected';
+export const REVIEW_STATUSES = ['working', 'gate-failed', 'awaiting-review', 'needs-revision', 'accepted', 'rejected'] as const;
+export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 
 export interface GateSummary {
   readonly passed: boolean;

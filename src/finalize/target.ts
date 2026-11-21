@@ -54,17 +54,19 @@ export interface TargetPreview {
   readonly overlap: readonly string[];
 }
 
-export type TargetProblemCode =
-  | 'bad-input'
-  | 'bad-object'
-  | 'target-missing'
-  | 'target-link'
-  | 'target-rewritten'
-  | 'target-has-run-work'
-  | 'target-conflict'
-  | 'case-clash'
-  | 'unexpected-result'
-  | 'git-failed';
+export const TARGET_PROBLEM_CODES = [
+  'bad-input',
+  'bad-object',
+  'target-missing',
+  'target-link',
+  'target-rewritten',
+  'target-has-run-work',
+  'target-conflict',
+  'case-clash',
+  'unexpected-result',
+  'git-failed',
+] as const;
+export type TargetProblemCode = (typeof TARGET_PROBLEM_CODES)[number];
 
 export interface TargetProblem {
   readonly code: TargetProblemCode;

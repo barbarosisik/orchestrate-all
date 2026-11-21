@@ -1,6 +1,7 @@
 /** Parsing `git diff-tree -r -z --raw --no-renames` output: one entry per added, changed or deleted path. */
 
-export type ChangeStatus = 'A' | 'D' | 'M' | 'T';
+export const CHANGE_STATUSES = ['A', 'D', 'M', 'T'] as const;
+export type ChangeStatus = (typeof CHANGE_STATUSES)[number];
 
 export interface TreeChange {
   /** Repo-relative path with forward slashes, exactly as git stores it. */
@@ -16,7 +17,7 @@ export interface TreeChange {
   readonly newId: string;
 }
 
-const STATUSES: ReadonlySet<string> = new Set(['A', 'D', 'M', 'T']);
+const STATUSES: ReadonlySet<string> = new Set(CHANGE_STATUSES);
 
 export function parseRawDiff(output: string): TreeChange[] {
   const tokens = output.split('\u0000');

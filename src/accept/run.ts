@@ -31,7 +31,8 @@ export interface CapturedOutput {
   readonly truncated: boolean;
 }
 
-export type CommandStatus = 'passed' | 'failed' | 'timed-out' | 'not-started';
+export const COMMAND_STATUSES = ['passed', 'failed', 'timed-out', 'not-started'] as const;
+export type CommandStatus = (typeof COMMAND_STATUSES)[number];
 
 export interface CommandResult {
   readonly argv: readonly string[];

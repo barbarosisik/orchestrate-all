@@ -68,15 +68,9 @@ export interface TaskSummary {
   readonly acceptance: TaskAcceptance | null;
 }
 
-export type FinalizeProblemCode =
-  | 'bad-input'
-  | 'leftover'
-  | 'history'
-  | 'nothing-to-finalize'
-  | TargetProblemCode
-  | CheckoutProblemCode
-  | 'checks-not-run'
-  | 'acceptance';
+/** Codes only the finalize checks themselves report; the rest come from target.ts and checkouts.ts. */
+export const OWN_FINALIZE_PROBLEM_CODES = ['bad-input', 'leftover', 'history', 'nothing-to-finalize', 'checks-not-run', 'acceptance'] as const;
+export type FinalizeProblemCode = (typeof OWN_FINALIZE_PROBLEM_CODES)[number] | TargetProblemCode | CheckoutProblemCode;
 
 export interface FinalizeProblem {
   readonly code: FinalizeProblemCode;
