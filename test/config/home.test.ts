@@ -20,11 +20,12 @@ describe('orchestraHome', () => {
 });
 
 describe('homeLayout', () => {
-  it('keeps worktrees and the empty hooks folder directly under the home', () => {
+  it('keeps worktrees, run folders and the empty hooks folder directly under the home', () => {
     const home = join(homedir(), '.orchestra');
     expect(homeLayout(home)).toEqual({
       home,
       worktrees: join(home, 'wt'),
+      runs: join(home, 'runs'),
       emptyHooks: join(home, 'empty-hooks'),
     });
   });

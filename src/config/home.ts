@@ -1,6 +1,6 @@
 /**
  * Orchestra's data folder (ORCHESTRA_HOME). Everything Orchestra writes lives here, outside the user's
- * repository: task worktrees now, run folders later. Paths stay short because Windows limits path length.
+ * repository: task worktrees and run folders. Paths stay short because Windows limits path length.
  */
 
 import { homedir } from 'node:os';
@@ -20,10 +20,12 @@ export interface HomeLayout {
   readonly home: string;
   /** Task worktrees: `<home>/wt/<runId>/<taskId>`. */
   readonly worktrees: string;
+  /** Run folders: `<home>/runs/<runId>`, everything a run records (store/). */
+  readonly runs: string;
   /** An always-empty folder. Pointing core.hooksPath here stops repository hooks from running. */
   readonly emptyHooks: string;
 }
 
 export function homeLayout(home: string): HomeLayout {
-  return { home, worktrees: join(home, 'wt'), emptyHooks: join(home, 'empty-hooks') };
+  return { home, worktrees: join(home, 'wt'), runs: join(home, 'runs'), emptyHooks: join(home, 'empty-hooks') };
 }
