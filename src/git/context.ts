@@ -95,7 +95,8 @@ async function resolveUserHooks(ctx: RepoContext): Promise<string> {
   if (result.code !== 0) throw new Error(`Could not read core.hooksPath: ${describeGitFailure(result)}`);
   const value = result.stdout.replace(/\r?\n$/, '');
   // Git reads a relative core.hooksPath from the top of the checkout it runs in: here, the user's own.
-  return isAbsolute(value) ? value : resolve(ctx.repoRoot, value);
+  // resolve() also gives Windows paths their usual backslashes (git reports C:/...).
+  return isAbsolute(value) ? resolve(value) : resolve(ctx.repoRoot, value);
 }
 
 /** The user's hooks folder, resolved once per context. */

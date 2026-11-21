@@ -12,7 +12,7 @@ import {
   startCommitFor,
   type TaskWorktree,
 } from '../../src/worktree/manager.js';
-import { fixtures, installHook, type Fixture } from '../helpers/fixture.js';
+import { fixtures, rewriteFile, installHook, type Fixture } from '../helpers/fixture.js';
 import { makeRepo } from '../helpers/tmprepo.js';
 
 const f = fixtures();
@@ -206,7 +206,7 @@ describe('a worker that tampers with its .git file', () => {
     const decoy = makeRepo();
     try {
       decoy.git('checkout', '-q', '-b', 'decoy');
-      writeFileSync(join(wt.path, '.git'), `gitdir: ${join(decoy.dir, '.git')}\n`);
+      rewriteFile(join(wt.path, '.git'), `gitdir: ${join(decoy.dir, '.git')}\n`);
 
       const head = await worktreeGit(fx.ctx, wt, ['symbolic-ref', 'HEAD']);
       expect(head.stdout.trim()).toBe(wt.ref);
@@ -258,7 +258,7 @@ describe('removeTaskWorktree', () => {
   it('removes a worktree whose .git file a worker rewrote', async () => {
     const fx = f.make();
     const wt = await create(fx);
-    writeFileSync(join(wt.path, '.git'), 'gitdir: /nowhere\n');
+    rewriteFile(join(wt.path, '.git'), 'gitdir: /nowhere\n');
     const result = await removeTaskWorktree(fx.ctx, wt, { deleteBranchAt: wt.startSha, retries: 0 });
     expect(result).toMatchObject({ ok: true, folderRemoved: true, branchDeleted: true });
     expect(existsSync(wt.adminDir)).toBe(false);

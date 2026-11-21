@@ -27,7 +27,7 @@
  */
 
 import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homeLayout } from '../config/home.js';
 import { adminGit, repoGit, type RepoContext } from '../git/context.js';
 import { describeGitFailure, type GitResult } from '../git/run.js';
@@ -221,7 +221,8 @@ function userCheckouts(ctx: RepoContext, entries: readonly WorktreeEntry[]): Rec
   const result: Record<string, string> = {};
   for (const entry of entries) {
     if (isOrchestraCheckout(ctx, entry)) continue;
-    result[entry.path] = entry.bare ? 'bare' : (entry.branch ?? `detached at ${entry.head ?? 'nothing'}`);
+    // resolve(): git lists Windows paths as C:/..., shown here the usual way.
+    result[resolve(entry.path)] = entry.bare ? 'bare' : (entry.branch ?? `detached at ${entry.head ?? 'nothing'}`);
   }
   return result;
 }

@@ -9,7 +9,7 @@ import {
   type IntegrityReport,
 } from '../../src/integrity/check.js';
 import { createTaskWorktree, type TaskWorktree } from '../../src/worktree/manager.js';
-import { fixtures, gitSupports, type Fixture, type FixtureOptions } from '../helpers/fixture.js';
+import { fixtures, rewriteFile, gitSupports, type Fixture, type FixtureOptions } from '../helpers/fixture.js';
 
 const f = fixtures();
 const scratch: string[] = [];
@@ -106,7 +106,7 @@ describe('checkIntegrity: what a worker may do', () => {
 describe("checkIntegrity: tampering with the task's own worktree", () => {
   it('catches a rewritten .git file', async () => {
     const s = await setup();
-    writeFileSync(join(s.wt.path, '.git'), `gitdir: ${join(tmpdir(), 'elsewhere')}\n`);
+    rewriteFile(join(s.wt.path, '.git'), `gitdir: ${join(tmpdir(), 'elsewhere')}\n`);
     expect(await s.codes()).toEqual(['git-pointer']);
   });
 

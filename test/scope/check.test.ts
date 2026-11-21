@@ -5,7 +5,7 @@ import { runGit } from '../../src/git/run.js';
 import { checkScope, commitTask, taskCommitMessage, type ScopeReport } from '../../src/scope/check.js';
 import type { ScopeTask } from '../../src/scope/rules.js';
 import { createTaskWorktree, type TaskWorktree } from '../../src/worktree/manager.js';
-import { fixtures, installHook, type Fixture } from '../helpers/fixture.js';
+import { fixtures, rewriteFile, installHook, type Fixture } from '../helpers/fixture.js';
 
 const f = fixtures();
 afterEach(() => f.cleanupAll());
@@ -238,7 +238,7 @@ describe('checkScope', () => {
 
   it('refuses to run git in a worktree whose links were tampered with', async () => {
     const s = await setup();
-    writeFileSync(join(s.wt.path, '.git'), 'gitdir: /somewhere/else\n');
+    rewriteFile(join(s.wt.path, '.git'), 'gitdir: /somewhere/else\n');
     const result = await checkScope(s.fx.ctx, s.wt, api, { fromCommit: s.fx.base });
     expect(result.ok ? 'ok' : result.error.code).toBe('worktree-tampered');
   });

@@ -53,6 +53,15 @@ export function makeFixture(opts: FixtureOptions = {}): Fixture {
   };
 }
 
+/**
+ * Replaces a file's content as a worker could. Git for Windows marks a worktree's `.git` file hidden, and
+ * Windows refuses to overwrite a hidden file in place, so the file is deleted first.
+ */
+export function rewriteFile(path: string, content: string): void {
+  rmSync(path, { force: true });
+  writeFileSync(path, content);
+}
+
 /** Shell-friendly form of a path for a hook script (Git for Windows' sh understands C:/...). */
 function shPath(path: string): string {
   return path.replace(/\\/g, '/');
