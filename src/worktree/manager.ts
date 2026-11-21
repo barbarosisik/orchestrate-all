@@ -5,6 +5,9 @@
  *   folder: <ORCHESTRA_HOME>/wt/<runId>/<taskId>
  *   branch: orchestra/<runId>/<taskId>, created at the task's start commit
  *
+ * A run also gets check worktrees on its own branches (`<home>/wt/<runId>/integration` on
+ * `orchestra/<runId>/integration`, and `.../finalize`), where the combined result is tested (step 8).
+ *
  * The worktree is created locked (so `git worktree prune` and other tools leave it alone) and stays locked
  * until Orchestra removes it. Removal only ever touches folders under `<home>/wt` and branches under
  * `orchestra/`, and deletes a branch only if it still points where the caller expects.
@@ -25,11 +28,12 @@ import { repoGit, worktreeGit, type RepoContext } from '../git/context.js';
 import { describeGitFailure, LONG_GIT_TIMEOUT_MS } from '../git/run.js';
 import { fingerprintPath } from '../integrity/fingerprint.js';
 import { canonicalPath, isInsidePath, samePath } from '../repo/canonical.js';
-import { branchRef, isValidRunId, isValidTaskId, taskBranch } from '../run/names.js';
+import { branchRef, isRunBranchName, isValidRunId, isValidTaskId, taskBranch, type RunBranchName } from '../run/names.js';
 import { adminTarget, checkWorktreeLinks, findAdminDir, sameLocation } from './links.js';
 
 export interface TaskWorktree {
   readonly runId: string;
+  /** The task's id; for a check worktree, the run branch's name ("integration" or "finalize"). */
   readonly taskId: string;
   /** Canonical folder of the checkout: `<home>/wt/<runId>/<taskId>`. */
   readonly path: string;
@@ -37,7 +41,7 @@ export interface TaskWorktree {
   readonly branch: string;
   /** `refs/heads/orchestra/<runId>/<taskId>` */
   readonly ref: string;
-  /** The commit the branch was created at. */
+  /** The commit the branch was created at (or, for a check worktree, pointed at when it was checked out). */
   readonly startSha: string;
   /** Git's admin folder for this worktree, `<commonDir>/worktrees/<name>`, found and checked at creation. */
   readonly adminDir: string;
@@ -57,6 +61,7 @@ export type WorktreeErrorCode =
   | 'home-overlaps-repo'
   | 'path-exists'
   | 'branch-exists'
+  | 'bad-branch'
   | 'git-failed'
   | 'bad-layout'
   | 'unsupported';
@@ -156,10 +161,58 @@ function overlapsRepo(ctx: RepoContext, folder: string): boolean {
   );
 }
 
-export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): Promise<CreateResult> {
+/** A worktree for one of the run's own branches, which already exists and must point at `tip`. */
+export interface CheckWorktreeInput {
+  readonly runId: string;
+  readonly name: RunBranchName;
+  readonly tip: string;
+}
+
+interface AddInput {
+  readonly runId: string;
+  /** Folder and branch name: a task id, or a run branch name. */
+  readonly name: string;
+  readonly startSha: string;
+  /** "new": create the branch at startSha; "existing": check out the run's branch, which must point at startSha. */
+  readonly branch: 'new' | 'existing';
+  readonly lockReason: string;
+}
+
+/**
+ * Creates the task's worktree and branch at its start commit. Refuses an existing folder or branch: Orchestra
+ * never reuses either.
+ */
+export function createTaskWorktree(ctx: RepoContext, input: CreateInput): Promise<CreateResult> {
   const { runId, taskId, startSha } = input;
+  if (!isValidTaskId(taskId)) return Promise.resolve(fail('bad-name', `"${taskId}" is not a valid task id.`));
+  return addWorktree(ctx, { runId, name: taskId, startSha, branch: 'new', lockReason: `orchestra run ${runId} task ${taskId}` });
+}
+
+/**
+ * Checks out one of the run's own branches (`orchestra/<runId>/integration` or `.../finalize`) in a locked
+ * worktree of its own, `<home>/wt/<runId>/<name>`, so the run's combined result can be tested there. The
+ * branch must already exist and point at `tip`; removing the worktree later leaves the branch alone unless
+ * asked otherwise.
+ */
+export function createCheckWorktree(ctx: RepoContext, input: CheckWorktreeInput): Promise<CreateResult> {
+  const { runId, name, tip } = input;
+  if (!isRunBranchName(name)) return Promise.resolve(fail('bad-name', `"${String(name)}" is not one of the run's branches.`));
+  return addWorktree(ctx, { runId, name, startSha: tip, branch: 'existing', lockReason: `orchestra run ${runId} ${name}` });
+}
+
+/** Why the run's existing branch can't be checked out at `tip`, or null. */
+async function existingBranchProblem(ctx: RepoContext, ref: string, branch: string, tip: string): Promise<string | null> {
+  const link = await repoGit(ctx, ['symbolic-ref', '--quiet', ref]);
+  if (link.code === 0) return `Branch ${branch} is a link to ${link.stdout.trim()}, not a plain branch.`;
+  const at = await repoGit(ctx, ['rev-parse', '--verify', '--quiet', ref]);
+  if (at.code !== 0) return `Branch ${branch} does not exist.`;
+  if (at.stdout.trim() !== tip) return `Branch ${branch} is at ${at.stdout.trim().slice(0, 12)}, not at ${tip.slice(0, 12)}.`;
+  return null;
+}
+
+async function addWorktree(ctx: RepoContext, input: AddInput): Promise<CreateResult> {
+  const { runId, name, startSha, lockReason } = input;
   if (!isValidRunId(runId)) return fail('bad-name', `"${runId}" is not a valid run id.`);
-  if (!isValidTaskId(taskId)) return fail('bad-name', `"${taskId}" is not a valid task id.`);
   if (!FULL_SHA.test(startSha)) return fail('bad-start', `"${startSha}" is not a full commit id.`);
 
   const root = worktreeRoot(ctx);
@@ -174,20 +227,24 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
   const runDir = join(root, runId);
   const runProblem = runFolderProblem(runDir);
   if (runProblem !== null) return fail('bad-layout', runProblem);
-  const path = join(runDir, taskId);
+  const path = join(runDir, name);
   if (pathExists(path)) return fail('path-exists', `${path} already exists. Orchestra never reuses a folder.`);
 
-  const branch = taskBranch(runId, taskId);
+  const branch = taskBranch(runId, name);
   const ref = branchRef(branch);
   const start = await repoGit(ctx, ['rev-parse', '--verify', '--quiet', `${startSha}^{commit}`]);
   if (start.code !== 0 || start.stdout.trim() !== startSha) {
     return fail('bad-start', `Commit ${startSha} is not in this repository.`);
   }
-  const existing = await repoGit(ctx, ['rev-parse', '--verify', '--quiet', ref]);
-  if (existing.code === 0) return fail('branch-exists', `Branch ${branch} already exists.`);
+  if (input.branch === 'new') {
+    const existing = await repoGit(ctx, ['rev-parse', '--verify', '--quiet', ref]);
+    if (existing.code === 0) return fail('branch-exists', `Branch ${branch} already exists.`);
+  } else {
+    const problem = await existingBranchProblem(ctx, ref, branch, startSha);
+    if (problem !== null) return fail('bad-branch', problem);
+  }
 
   mkdirSync(runDir, { recursive: true });
-  const lockReason = `orchestra run ${runId} task ${taskId}`;
   const add = await repoGit(
     ctx,
     [
@@ -203,18 +260,15 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
       '--lock',
       '--reason',
       lockReason,
-      '-b',
-      branch,
-      path,
-      startSha,
+      ...(input.branch === 'new' ? ['-b', branch, path, startSha] : [path, branch]),
     ],
     { timeoutMs: LONG_GIT_TIMEOUT_MS },
   );
 
-  const guessAdmin = join(ctx.commonDir, 'worktrees', taskId);
+  const guessAdmin = join(ctx.commonDir, 'worktrees', name);
   const partial: TaskWorktree = {
     runId,
-    taskId,
+    taskId: name,
     path,
     branch,
     ref,
@@ -224,8 +278,12 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
     worktreeConfig: 'missing',
   };
   // Cleanup after a failure goes through removeTaskWorktree, which refuses anything not laid out as expected.
+  // A branch this call didn't create is never deleted.
   const undo = async (handle: TaskWorktree, message: string, code: WorktreeErrorCode): Promise<CreateResult> => {
-    const removed = await removeTaskWorktree(ctx, handle, { deleteBranchAt: startSha, retries: 0 });
+    const removed = await removeTaskWorktree(ctx, handle, {
+      ...(input.branch === 'new' ? { deleteBranchAt: startSha } : {}),
+      retries: 0,
+    });
     const leftover = removed.ok ? '' : ` Cleanup was incomplete: ${removed.problems.join(' ')}`;
     return fail(code, `${message}${leftover}`);
   };
@@ -251,6 +309,13 @@ export async function createTaskWorktree(ctx: RepoContext, input: CreateInput): 
     adminDir,
     worktreeConfig: await fingerprintPath(join(adminDir, 'config.worktree')),
   };
+  // The branch it checked out, where it was expected (an existing branch may have moved meanwhile).
+  const listed = await listWorktrees(ctx);
+  const own = listed.ok ? listed.worktrees.find((e) => sameLocation(e.path, path, ctx.caseInsensitivePaths)) : undefined;
+  if (own === undefined || own.branch !== ref || own.head !== startSha) {
+    const found = own === undefined ? 'nothing git lists' : (own.branch ?? `a detached HEAD`) + ` at ${(own.head ?? '').slice(0, 12)}`;
+    return undo(worktree, `The new worktree has ${found} checked out instead of ${branch} at ${startSha.slice(0, 12)}.`, 'bad-branch');
+  }
   const sparse = await worktreeGit(ctx, worktree, ['config', '--type=bool', '--get', 'core.sparseCheckout']);
   if (sparse.code === 0 && sparse.stdout.trim() === 'true') {
     return undo(
@@ -282,7 +347,9 @@ export interface RemoveResult {
 /** Why this handle is not something Orchestra created, or null. Removal refuses anything else. */
 function ownershipProblem(ctx: RepoContext, wt: TaskWorktree): string | null {
   const ci = ctx.caseInsensitivePaths;
-  if (!isValidRunId(wt.runId) || !isValidTaskId(wt.taskId)) return 'The run or task id is not valid.';
+  if (!isValidRunId(wt.runId) || !(isValidTaskId(wt.taskId) || isRunBranchName(wt.taskId))) {
+    return 'The run or task id is not valid.';
+  }
   if (wt.branch !== taskBranch(wt.runId, wt.taskId) || wt.ref !== branchRef(wt.branch)) {
     return `"${wt.branch}" is not the Orchestra branch for this task.`;
   }
@@ -388,6 +455,36 @@ export async function removeTaskWorktree(
   // The run folder goes once its last worktree is gone (rmdir only removes an empty folder).
   if (folderRemoved) await rmdir(dirname(wt.path)).catch(() => undefined);
   return { ok: folderRemoved && problems.length === 0, folderRemoved, branchDeleted, problems };
+}
+
+/**
+ * Removes a check worktree an earlier, interrupted check left behind, found by its folder. The run's branch
+ * is kept. Returns null when there is nothing to remove.
+ */
+export async function removeLeftoverCheckWorktree(
+  ctx: RepoContext,
+  runId: string,
+  name: RunBranchName,
+): Promise<RemoveResult | null> {
+  if (!isValidRunId(runId) || !isRunBranchName(name)) {
+    return { ok: false, folderRemoved: false, branchDeleted: false, problems: ['The run id or branch name is not valid.'] };
+  }
+  const home = canonicalPath(ctx.home) ?? ctx.home;
+  const path = join(homeLayout(home).worktrees, runId, name);
+  if (!pathExists(path)) return null;
+  const branch = taskBranch(runId, name);
+  const handle: TaskWorktree = {
+    runId,
+    taskId: name,
+    path,
+    branch,
+    ref: branchRef(branch),
+    startSha: '',
+    adminDir: findAdminDir(ctx.commonDir, path, ctx.caseInsensitivePaths) ?? join(ctx.commonDir, 'worktrees', name),
+    lockReason: '',
+    worktreeConfig: 'missing',
+  };
+  return removeTaskWorktree(ctx, handle);
 }
 
 export interface WorktreeEntry {

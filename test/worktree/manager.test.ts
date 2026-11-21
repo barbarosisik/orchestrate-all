@@ -4,9 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { worktreeGit } from '../../src/git/context.js';
 import { canonicalPath } from '../../src/repo/canonical.js';
 import { checkWorktreeLinks } from '../../src/worktree/links.js';
+import { checkIntegrity, takeBaseline } from '../../src/integrity/check.js';
 import {
+  createCheckWorktree,
   createTaskWorktree,
   listWorktrees,
+  removeLeftoverCheckWorktree,
   parseWorktreeList,
   removeTaskWorktree,
   startCommitFor,
@@ -196,6 +199,95 @@ describe('createTaskWorktree', () => {
     const inside = { ...fx.ctx, home: join(fx.ctx.repoRoot, '.orchestra') };
     const result = await createTaskWorktree(inside, { runId: 'run1', taskId: 'api', startSha: fx.base });
     expect(result.ok ? 'ok' : result.error.code).toBe('home-overlaps-repo');
+  });
+});
+
+describe('createCheckWorktree', () => {
+  const REF = 'refs/heads/orchestra/run1/integration';
+
+  async function withIntegration(fx: Fixture): Promise<string> {
+    fx.repo.git('update-ref', REF, fx.base);
+    return fx.base;
+  }
+
+  it("checks out the run's existing branch in its own locked folder, and keeps the branch on removal", async () => {
+    const fx = f.make({ files: { 'README.md': 'hello\n', 'src/a.ts': 'a\n' } });
+    const tip = await withIntegration(fx);
+    const created = await createCheckWorktree(fx.ctx, { runId: 'run1', name: 'integration', tip });
+    if (!created.ok) throw new Error(created.error.message);
+    const wt = created.worktree;
+    expect(wt).toMatchObject({ runId: 'run1', taskId: 'integration', branch: 'orchestra/run1/integration', ref: REF, startSha: tip });
+    expect(wt.path).toBe(join(canonicalPath(fx.home) ?? fx.home, 'wt', 'run1', 'integration'));
+    expect(readFileSync(join(wt.path, 'src/a.ts'), 'utf8')).toBe('a\n');
+    const listing = fx.repo.git('worktree', 'list', '--porcelain');
+    expect(listing).toContain(`branch ${REF}`);
+    expect(listing).toContain('locked orchestra run run1 integration');
+
+    const removed = await removeTaskWorktree(fx.ctx, wt);
+    expect(removed).toMatchObject({ ok: true, folderRemoved: true, branchDeleted: false });
+    expect(fx.repo.git('rev-parse', REF)).toBe(tip);
+  });
+
+  it("is not one of the user's worktrees for the tamper checks", async () => {
+    const fx = f.make();
+    const tip = await withIntegration(fx);
+    const task = await create(fx);
+    const baseline = await takeBaseline(fx.ctx, { globalGitFiles: [] });
+    const created = await createCheckWorktree(fx.ctx, { runId: 'run1', name: 'integration', tip });
+    if (!created.ok) throw new Error(created.error.message);
+    const report = await checkIntegrity(fx.ctx, task, baseline, fx.base, { globalGitFiles: [] });
+    expect(report.violations).toEqual([]);
+  });
+
+  it('refuses a name that is not a run branch, and a branch that is missing, moved or a link', async () => {
+    const fx = f.make();
+    const code = async (name: string, tip = fx.base): Promise<string> => {
+      const result = await createCheckWorktree(fx.ctx, { runId: 'run1', name: name as 'integration', tip });
+      return result.ok ? 'ok' : result.error.code;
+    };
+    expect(await code('api')).toBe('bad-name');
+    expect(await code('finalize')).toBe('bad-branch');
+    fx.repo.git('update-ref', REF, fx.base);
+    fx.repo.write('b.txt');
+    const other = fx.repo.commitAll('b');
+    expect(await code('integration', other)).toBe('bad-branch');
+    fx.repo.git('symbolic-ref', 'refs/heads/orchestra/run1/finalize', 'refs/heads/main');
+    expect(await code('finalize', other)).toBe('bad-branch');
+    expect(fx.repo.git('rev-parse', 'main')).toBe(other);
+    expect(existsSync(join(fx.home, 'wt', 'run1', 'integration'))).toBe(false);
+  });
+
+  it('refuses a branch already checked out elsewhere, and leaves the branch alone while cleaning up', async () => {
+    const fx = f.make();
+    const tip = await withIntegration(fx);
+    const elsewhere = join(fx.home, 'elsewhere');
+    fx.repo.git('worktree', 'add', '-q', elsewhere, 'orchestra/run1/integration');
+    const result = await createCheckWorktree(fx.ctx, { runId: 'run1', name: 'integration', tip });
+    expect(result).toMatchObject({ ok: false, error: { code: 'git-failed' } });
+    expect(fx.repo.git('rev-parse', REF)).toBe(tip);
+    expect(existsSync(join(fx.home, 'wt', 'run1', 'integration'))).toBe(false);
+    expect(existsSync(join(elsewhere, 'README.md'))).toBe(true);
+  });
+});
+
+describe('removeLeftoverCheckWorktree', () => {
+  it('removes a check worktree an interrupted check left, and returns null when there is none', async () => {
+    const fx = f.make();
+    fx.repo.git('update-ref', 'refs/heads/orchestra/run1/finalize', fx.base);
+    expect(await removeLeftoverCheckWorktree(fx.ctx, 'run1', 'finalize')).toBeNull();
+    const created = await createCheckWorktree(fx.ctx, { runId: 'run1', name: 'finalize', tip: fx.base });
+    if (!created.ok) throw new Error(created.error.message);
+    writeFileSync(join(created.worktree.path, 'output.txt'), 'x\n');
+    expect(await removeLeftoverCheckWorktree(fx.ctx, 'run1', 'finalize')).toMatchObject({ ok: true, folderRemoved: true });
+    expect(existsSync(created.worktree.path)).toBe(false);
+    expect(fx.repo.git('worktree', 'list', '--porcelain')).not.toContain('finalize');
+    expect(fx.repo.git('rev-parse', 'refs/heads/orchestra/run1/finalize')).toBe(fx.base);
+  });
+
+  it('refuses names that are not a run and a run branch', async () => {
+    const fx = f.make();
+    expect(await removeLeftoverCheckWorktree(fx.ctx, 'Run 1', 'finalize')).toMatchObject({ ok: false });
+    expect(await removeLeftoverCheckWorktree(fx.ctx, 'run1', 'api' as 'finalize')).toMatchObject({ ok: false });
   });
 });
 
