@@ -157,6 +157,13 @@ describe('runCommand', () => {
     }
   });
 
+  it('takes a time limit too long for a timer as the longest one, instead of stopping the command at once', async () => {
+    for (const timeoutMs of [2 ** 31, Number.POSITIVE_INFINITY, Number.NaN, -1]) {
+      const result = await runCommand(tempDir(), node('setTimeout(() => {}, 300)'), { timeoutMs });
+      expect(result.status, String(timeoutMs)).toBe('passed');
+    }
+  });
+
   it('keeps output within the limit', async () => {
     const result = await runCommand(tempDir(), node('process.stdout.write("x".repeat(100000))'), { maxOutputBytes: 1000 });
     expect(result.stdout.totalBytes).toBe(100000);

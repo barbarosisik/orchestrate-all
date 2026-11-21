@@ -14,7 +14,7 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import { DEFAULT_LIMITS } from '../config/defaults.js';
-import { OWN_PROCESS_GROUP, stopTree } from '../os/process-tree.js';
+import { OWN_PROCESS_GROUP, stopTree, timerDelay } from '../os/process-tree.js';
 import { commandEnv, type CommandEnvOptions } from './env.js';
 import { resolveCommand, type Launch } from './resolve.js';
 
@@ -139,6 +139,7 @@ export function launchCommand(
   timeoutMs: number,
   maxOutputBytes: number,
 ): Promise<CommandResult> {
+  const limit = timerDelay(timeoutMs, DEFAULT_COMMAND_TIMEOUT_MS);
   return new Promise((resolve) => {
     // A monotonic clock: a system clock set back during a command must not give a negative time.
     const started = performance.now();
@@ -182,7 +183,7 @@ export function launchCommand(
         durationMs: Math.round(performance.now() - started),
         stdout: stdout.result(),
         stderr: stderr.result(),
-        error: timedOut ? `Stopped after ${Math.round(timeoutMs / 1000)} s.` : error,
+        error: timedOut ? `Stopped after ${Math.round(limit / 1000)} s.` : error,
       });
     };
 
@@ -190,7 +191,7 @@ export function launchCommand(
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid !== undefined) void stopTree(child.pid, env);
-    }, timeoutMs);
+    }, limit);
 
     child.stdout.on('data', (chunk: Buffer) => stdout.add(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.add(chunk));
