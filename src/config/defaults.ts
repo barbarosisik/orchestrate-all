@@ -75,6 +75,10 @@ export const DEFAULT_LIMITS = {
   maxTasks: 8,
   maxParallelWorkers: 3,
   taskTimeoutMinutes: 30,
+  /** Per acceptance command; its whole process tree is stopped after this. */
+  acceptanceCommandTimeoutMinutes: 10,
+  /** How many times a reviewer may send a task back to its worker. */
+  maxRevisionRounds: 2,
 } as const;
 
 export function defaultValidationContext(readyEngines: readonly EngineName[]): ValidationContext {
