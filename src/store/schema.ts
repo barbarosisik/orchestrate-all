@@ -361,6 +361,8 @@ export const LogRecordSchema = z.discriminatedUnion('kind', [
     error: LoggedText.nullable(),
   }),
   record('integrity', { task: TaskIdSchema, round: RoundSchema, ok: z.boolean(), problems: LoggedProblemsSchema }),
+  /** The agents' own config folders compared before and after a worker (step 10, engines/agent-config.ts). */
+  record('agent-config', { task: TaskIdSchema, round: RoundSchema, ok: z.boolean(), problems: LoggedProblemsSchema }),
   record('scope', { task: TaskIdSchema, round: RoundSchema, clean: z.boolean(), files: Count, problems: LoggedProblemsSchema }),
   record('commit', { task: TaskIdSchema, round: RoundSchema, commit: ShaSchema, files: Count }),
   record('gate', { task: TaskIdSchema, round: RoundSchema, passed: z.boolean(), summary: LoggedText }),

@@ -7,9 +7,11 @@
  * gate per task and round, and the last finalize report.
  */
 
+import type { AgentConfigReport } from '../engines/agent-config.js';
 import type { FinalizeReport } from '../finalize/check.js';
 import type { IntegrityReport } from '../integrity/check.js';
 import type { MergeResult } from '../merge/integration.js';
+import type { EngineName } from '../plan/schema.js';
 import type { GateSummary, TaskReview, Transition } from '../review/state.js';
 import type { ScopeCheck } from '../scope/check.js';
 import { LOG_LIMITS, type LogEntry, type LoggedProblem, type LoggedProblems } from './schema.js';
@@ -60,6 +62,15 @@ export function integrityEntry(task: string, round: number, report: IntegrityRep
   return { kind: 'integrity', task, round, ok: report.ok, problems: loggedProblems(report.violations) };
 }
 
+/** The agents' config folders after a worker (step 10): each change, then what could not be compared. */
+export function agentConfigEntry(task: string, round: number, report: AgentConfigReport): LogEntry {
+  const problems = [
+    ...report.changes.map((c) => ({ code: c.change, message: `${c.path} was ${c.change} while the worker ran.`, paths: [c.path] })),
+    ...report.incomplete.map((message) => ({ code: 'incomplete', message })),
+  ];
+  return { kind: 'agent-config', task, round, ok: report.ok, problems: loggedProblems(problems) };
+}
+
 export function scopeEntry(task: string, round: number, check: ScopeCheck): LogEntry {
   if (!check.ok) return { kind: 'scope', task, round, clean: false, files: 0, problems: loggedProblems([check.error]) };
   const { report } = check;
@@ -104,6 +115,25 @@ export function finalizeEntry(report: FinalizeReport): LogEntry {
     tip: report.target?.tip ?? null,
     tree: report.target?.tree ?? null,
     problems: loggedProblems(report.problems),
+  };
+}
+
+/** A worker run starting or finishing (step 10). */
+export function workerEntry(
+  task: string,
+  round: number,
+  event: 'started' | 'finished',
+  run: { readonly engine: EngineName; readonly model: string; readonly exitCode: number | null; readonly error: string | null },
+): LogEntry {
+  return {
+    kind: 'worker',
+    task,
+    round,
+    event,
+    engine: run.engine,
+    model: run.model,
+    exitCode: run.exitCode,
+    error: run.error === null ? null : clipText(run.error),
   };
 }
 

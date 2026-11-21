@@ -4,6 +4,7 @@ import type { IntegrityReport } from '../../src/integrity/check.js';
 import { newTaskReview, recordGate, recordReview, type TaskReview } from '../../src/review/state.js';
 import type { ScopeReport } from '../../src/scope/check.js';
 import {
+  agentConfigEntry,
   clipText,
   commitEntry,
   finalizeEntry,
@@ -14,6 +15,7 @@ import {
   noteEntry,
   reviewEntry,
   scopeEntry,
+  workerEntry,
 } from '../../src/store/entries.js';
 import { DEFAULT_MAX_LOG_BYTES, maxLineBytes, serializeRecord } from '../../src/store/log.js';
 import { LOG_LIMITS, LogRecordSchema, type LogEntry, type LogRecord } from '../../src/store/schema.js';
@@ -165,5 +167,47 @@ describe('entries', () => {
     });
     expect(valid(finalizeEntry({ ...report, target: null }))).toMatchObject({ tip: null, tree: null });
     expect(valid(noteEntry('n'.repeat(3000)))).toMatchObject({ kind: 'note', message: expect.stringMatching(/…$/) });
+  });
+
+  it('builds worker and agent-config entries (step 10)', () => {
+    expect(valid(workerEntry('api', 1, 'started', { engine: 'codex', model: 'gpt-6', exitCode: null, error: null }))).toEqual({
+      kind: 'worker',
+      task: 'api',
+      round: 1,
+      event: 'started',
+      engine: 'codex',
+      model: 'gpt-6',
+      exitCode: null,
+      error: null,
+    });
+    const finished = valid(workerEntry('api', 1, 'finished', { engine: 'claude', model: 'opus', exitCode: 1, error: 'e'.repeat(5000) }));
+    expect(finished).toMatchObject({ exitCode: 1, error: expect.stringMatching(/…$/) });
+    expect(valid(agentConfigEntry('api', 0, { ok: true, changes: [], incomplete: [] }))).toEqual({
+      kind: 'agent-config',
+      task: 'api',
+      round: 0,
+      ok: true,
+      problems: { shown: [], more: 0 },
+    });
+    const changed = valid(
+      agentConfigEntry('api', 2, {
+        ok: false,
+        changes: [{ path: '/h/.claude/settings.json', change: 'changed' }],
+        incomplete: ['/h/.claude/skills has more than 5000 entries; only the first were compared.'],
+      }),
+    );
+    expect(changed).toEqual({
+      kind: 'agent-config',
+      task: 'api',
+      round: 2,
+      ok: false,
+      problems: {
+        shown: [
+          { code: 'changed', message: '/h/.claude/settings.json was changed while the worker ran.', paths: ['/h/.claude/settings.json'] },
+          { code: 'incomplete', message: '/h/.claude/skills has more than 5000 entries; only the first were compared.', paths: [] },
+        ],
+        more: 0,
+      },
+    });
   });
 });
