@@ -13,15 +13,21 @@
  *   Codex). `AGENTS.override.md` is Codex's alone and never given to other engines.
  *
  * What each engine loads by itself, in a worktree whose top is the repository's top:
- * - Claude Code: every Claude rule file (the top ones at the start, nested ones when it reads a file there) and
- *   what they import or link to; an AGENTS.md only from 2.1.277 on, and only where no CLAUDE.md is in charge
- *   (none at the top and none in its folder). An unknown version counts as older.
- * - Codex: the top folder's `AGENTS.override.md` (when not empty) or else its `AGENTS.md`; nothing below.
+ * - Claude Code: its rule files (the top ones at the start, nested ones when it reads a file there) and what they
+ *   import (four hops) or link to; an AGENTS.md only from 2.1.277 on, and only where no CLAUDE.md is in charge
+ *   (none at the top and none in its folder). An unknown version counts as older. A committed CLAUDE.local.md counts
+ *   as not loaded: it belongs to the "local" settings, which workers run without.
+ * - Codex: the top folder's `AGENTS.override.md` when it isn't empty, else its `AGENTS.md`; nothing below. Next to
+ *   an empty override, the AGENTS.md is pointed at (what Codex does then is not known).
  * - Antigravity: the top folder's `AGENTS.md`, GEMINI.md and `.agents/...` files; nothing below.
- * Files over what the engine loads (Codex 32 KiB, Antigravity 24,000 bytes) are pointed at to read in full. A
- * link checked out as text (core.symlinks off), or a file holding just another rule file's name, gives the
- * engine one line, so the worker is pointed at what it names. A CLAUDE.md that only imports is replaced by its
- * imports for engines that don't follow them.
+ * A name in another letter case counts as not loaded where the file system minds case. Files over what the engine
+ * loads (Codex 32 KiB, Antigravity 24,000 bytes, counting the bytes Windows line endings add) are pointed at to
+ * read in full. A link checked out as text (core.symlinks off), or a file holding just another rule file's name,
+ * gives the engine one line, so the worker is pointed at what it names. A CLAUDE.md that only imports is replaced by
+ * its imports, and theirs, for engines that don't follow them.
+ *
+ * Links: a worker is never pointed at a link or through one; a rule file that is a link leads only to the regular
+ * file in the repository it resolves to (the manifest has already refused to resolve anything else).
  *
  * Only committed files count (untracked and ignored ones are not in the worktree), and names that are odd in a
  * brief are never pointed at.
@@ -30,7 +36,8 @@
 import { atLeast, parseVersion } from '../engines/version.js';
 import { parseOwnsEntry } from '../plan/paths.js';
 import type { EngineName } from '../plan/schema.js';
-import { ANTIGRAVITY_RULES_CAP, CODEX_RULES_CAP, isOddName, type RuleFileEntry, type RulesManifest } from './manifest.js';
+import { DEFAULT_CASE_INSENSITIVE } from '../repo/canonical.js';
+import { ANTIGRAVITY_RULES_CAP, CODEX_RULES_CAP, isOddName, MAX_IMPORT_HOPS, type RuleFileEntry, type RulesManifest } from './manifest.js';
 import { CLAUDE_MAIN_KINDS } from './names.js';
 
 /** Claude Code reads AGENTS.md itself from this version on. */
@@ -58,6 +65,8 @@ export interface TaskRules {
 export interface RulesForTaskOptions {
   /** Claude Code's version from detection, for Claude workers. Unknown counts as older than 2.1.277. */
   readonly claudeVersion?: string | null;
+  /** Whether the worktree's file system ignores letter case (defaults to the platform's: Windows and macOS do). */
+  readonly caseInsensitive?: boolean;
 }
 
 /** Folder comparison key: Windows first, so letter case is ignored (as for owned paths). */
@@ -87,6 +96,7 @@ function relevantFolders(owns: readonly string[], ruleFolders: readonly string[]
 export function rulesForTask(manifest: RulesManifest, task: { readonly owns: readonly string[] }, engine: EngineName, opts: RulesForTaskOptions = {}): TaskRules {
   const files = manifest.files.filter((f) => f.source === 'committed' && !f.flags.some((flag) => flag.code === 'odd-name'));
   const byPath = new Map(files.map((f) => [key(f.path), f]));
+  const imported = new Map((manifest.imported ?? []).map((f) => [key(f.path), f]));
   const byFolder = new Map<string, RuleFileEntry[]>();
   for (const f of files) {
     const list = byFolder.get(key(f.folder)) ?? [];
@@ -94,34 +104,53 @@ export function rulesForTask(manifest: RulesManifest, task: { readonly owns: rea
     byFolder.set(key(f.folder), list);
   }
   const linksAsText = manifest.linksAsText;
+  const caseInsensitive = opts.caseInsensitive ?? DEFAULT_CASE_INSENSITIVE;
   const version = opts.claudeVersion === undefined || opts.claudeVersion === null ? null : parseVersion(opts.claudeVersion);
   const claudeReadsAgents = version !== null && atLeast(version, CLAUDE_AGENTS_MD_VERSION);
   const hasClaudeMain = (folder: string): boolean => (byFolder.get(key(folder)) ?? []).some((f) => CLAUDE_MAIN_KINDS.has(f.kind));
-  const rootOverride = (byFolder.get('') ?? []).some((f) => f.kind === 'AGENTS.override.md' && (f.size ?? 0) > 0);
-  // Files Claude reaches through its own rule files: their imports, and their links when links are real.
+  const rootOverrides = (byFolder.get('') ?? []).filter((f) => f.kind === 'AGENTS.override.md');
+  const rootOverride = rootOverrides.some((f) => (f.size ?? 0) > 0);
+
+  // Files Claude reaches through its own rule files: what they import (up to four hops), and their links when
+  // links are real.
   const claudeReaches = new Set<string>();
+  const reach = (imports: RuleFileEntry['imports'], hops: number): void => {
+    for (const i of imports) {
+      if (!i.exists || i.path === null || claudeReaches.has(key(i.path))) continue;
+      claudeReaches.add(key(i.path));
+      const next = imported.get(key(i.path));
+      if (next !== undefined && hops < MAX_IMPORT_HOPS) reach(next.imports, hops + 1);
+    }
+  };
   for (const f of files) {
     if (f.family !== 'claude') continue;
-    for (const i of f.imports) if (i.path !== null && i.exists) claudeReaches.add(key(i.path));
+    reach(f.imports, 1);
     if (f.link?.resolved != null && !linksAsText) claudeReaches.add(key(f.link.resolved));
   }
 
   const loadsItself = (f: RuleFileEntry): boolean => {
+    // On a file system that minds letter case, an engine asking for AGENTS.md doesn't find Agents.md.
+    if (f.nameCase && !caseInsensitive) return false;
     switch (engine) {
       case 'claude':
-        if (f.family === 'claude') return true;
+        // CLAUDE.local.md is the "local" setting source, which workers run without (--setting-sources project).
+        if (f.family === 'claude') return f.kind !== 'CLAUDE.local.md';
         if (f.kind !== 'AGENTS.md') return false;
         return claudeReaches.has(key(f.path)) || (claudeReadsAgents && !hasClaudeMain('') && !hasClaudeMain(f.folder));
       case 'codex':
-        return f.folder === '' && (rootOverride ? f.kind === 'AGENTS.override.md' : f.kind === 'AGENTS.md');
+        // An empty AGENTS.override.md: whether Codex then reads AGENTS.md is not known, so it is pointed at.
+        if (f.folder !== '') return false;
+        return rootOverride ? f.kind === 'AGENTS.override.md' : f.kind === 'AGENTS.md' && rootOverrides.length === 0;
       case 'antigravity':
         return f.folder === '' && (f.family === 'gemini' || f.kind === 'AGENTS.md');
     }
   };
+  /** Longer than the engine loads, counting Windows line endings (a worktree may have them). */
   const tooLong = (f: RuleFileEntry): boolean => {
     if (f.link !== null || f.size === null) return false;
-    if (engine === 'codex') return f.size > CODEX_RULES_CAP;
-    if (engine === 'antigravity') return f.size > ANTIGRAVITY_RULES_CAP;
+    const bytes = f.size + (f.lineBreaks ?? 0);
+    if (engine === 'codex') return bytes > CODEX_RULES_CAP;
+    if (engine === 'antigravity') return bytes > ANTIGRAVITY_RULES_CAP;
     return false;
   };
 
@@ -132,11 +161,35 @@ export function rulesForTask(manifest: RulesManifest, task: { readonly owns: rea
     seen.add(key(path));
     pointers.push({ path, folder, reason, via });
   };
-  /** Points at a file a rule file leads to, unless the engine loads it fully by itself. */
+  /**
+   * Points at a file a rule file leads to, unless the engine loads it fully by itself. Never at a link, and never
+   * through one: a rule file that is a link leads only to the regular file in the repository it resolves to.
+   */
   const lead = (path: string, folder: string, reason: PointerReason, via: string): void => {
     const target = byPath.get(key(path));
-    if (target !== undefined && loadsItself(target) && target.link === null && target.pointsTo === null && !tooLong(target)) return;
-    push(target?.link?.resolved ?? target?.pointsTo ?? path, folder, reason, via);
+    if (target === undefined) {
+      push(path, folder, reason, via);
+      return;
+    }
+    if (target.link !== null) {
+      if (target.link.resolved !== null) push(target.link.resolved, folder, reason, via);
+      return;
+    }
+    if (target.pointsTo !== null) {
+      push(target.pointsTo, folder, reason, via);
+      return;
+    }
+    if (!loadsItself(target) || tooLong(target)) push(target.path, folder, reason, via);
+  };
+  /** Points at what a file imports, and at what those import, up to Claude's four hops. */
+  const leadImports = (imports: RuleFileEntry['imports'], folder: string, via: string, hops: number, visited: Set<string>): void => {
+    for (const i of imports) {
+      if (!i.exists || i.path === null || visited.has(key(i.path))) continue;
+      visited.add(key(i.path));
+      lead(i.path, folder, 'import', via);
+      const next = imported.get(key(i.path));
+      if (next !== undefined && hops < MAX_IMPORT_HOPS) leadImports(next.imports, folder, next.path, hops + 1, visited);
+    }
   };
 
   const wanted = (folder: string): RuleFileEntry[] => {
@@ -146,7 +199,7 @@ export function rulesForTask(manifest: RulesManifest, task: { readonly owns: rea
     const gemini = here.filter((f) => f.family === 'gemini');
     let primary: RuleFileEntry[];
     if (engine === 'codex') {
-      const override = here.filter((f) => f.kind === 'AGENTS.override.md' && (folder !== '' || (f.size ?? 0) > 0));
+      const override = here.filter((f) => f.kind === 'AGENTS.override.md' && (f.size ?? 0) > 0);
       primary = override.length > 0 ? override : shared;
     } else primary = [...shared, ...(engine === 'claude' ? claude : gemini)];
     if (primary.length > 0) return primary;
@@ -172,7 +225,7 @@ export function rulesForTask(manifest: RulesManifest, task: { readonly owns: rea
         continue;
       }
       if (!f.importsOnly) push(f.path, f.folder, 'not-loaded', null);
-      for (const i of f.imports) if (i.path !== null && i.exists) lead(i.path, f.folder, 'import', f.path);
+      leadImports(f.imports, f.folder, f.path, 1, new Set());
     }
   }
   return { any: files.length > 0, pointers };

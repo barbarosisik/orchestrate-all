@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { rulesForTask, type RulesForTaskOptions } from '../../src/rules/applicable.js';
-import type { RuleFileEntry, RuleFlagCode, RulesManifest } from '../../src/rules/manifest.js';
+import type { ImportedFile, RuleFileEntry, RuleFlagCode, RulesManifest } from '../../src/rules/manifest.js';
 import { classifyRulePath } from '../../src/rules/names.js';
 import type { EngineName } from '../../src/plan/schema.js';
 
 interface FileSpec {
   readonly size?: number;
+  readonly lineBreaks?: number;
   readonly link?: { target: string; resolved: string | null };
   readonly pointsTo?: string;
   readonly imports?: readonly string[];
@@ -23,6 +24,7 @@ function file(path: string, spec: FileSpec = {}): RuleFileEntry {
     source: spec.source ?? 'committed',
     id: spec.source === undefined || spec.source === 'committed' ? 'a'.repeat(40) : null,
     size: spec.size ?? 100,
+    lineBreaks: spec.lineBreaks ?? 0,
     link: spec.link ?? null,
     pointsTo: spec.pointsTo ?? null,
     imports: (spec.imports ?? []).map((p) => (p.startsWith('~') ? { raw: p, path: null, external: true, exists: false } : { raw: p, path: p.replace(/^missing:/, ''), external: false, exists: !p.startsWith('missing:') })),
@@ -31,10 +33,14 @@ function file(path: string, spec: FileSpec = {}): RuleFileEntry {
   };
 }
 
-function manifest(files: readonly RuleFileEntry[], linksAsText = false): RulesManifest {
+function manifest(files: readonly RuleFileEntry[], linksAsText = false, imported: readonly ImportedFile[] = []): RulesManifest {
   // Sorted by path, as buildRulesManifest gives them.
   const sorted = [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  return { baseSha: 'b'.repeat(40), linksAsText, files: sorted, globals: [], problems: [] };
+  return { baseSha: 'b'.repeat(40), linksAsText, files: sorted, imported, globals: [], problems: [] };
+}
+
+function importedFile(path: string, imports: readonly string[] = []): ImportedFile {
+  return { path, id: 'c'.repeat(40), size: 10, importedBy: [], imports: imports.map((p) => ({ raw: p, path: p, external: false, exists: true })), flags: [] };
 }
 
 const NEW_CLAUDE: RulesForTaskOptions = { claudeVersion: '2.1.300' };
@@ -108,11 +114,28 @@ describe('rules for a task', () => {
     expect(paths(m, 'claude', ['pkg/x.ts'], OLD_CLAUDE)).toEqual(['AGENTS.md', 'pkg/AGENTS.md']);
   });
 
-  it('uses AGENTS.md at the top when AGENTS.override.md is empty', () => {
-    const m = manifest([file('AGENTS.override.md', { size: 0 }), file('AGENTS.md')]);
-    expect(paths(m, 'codex', ['a.ts'])).toEqual([]);
+  it('points Codex at the AGENTS.md beside an empty AGENTS.override.md, in every folder', () => {
+    const m = manifest([file('AGENTS.override.md', { size: 0 }), file('AGENTS.md'), file('pkg/AGENTS.override.md', { size: 0 }), file('pkg/AGENTS.md')]);
+    expect(paths(m, 'codex', ['pkg/a.ts'])).toEqual(['AGENTS.md', 'pkg/AGENTS.md']);
     const nested = manifest([file('AGENTS.override.md', { size: 0 }), file('src/AGENTS.md')]);
     expect(paths(nested, 'codex', ['src/a.ts'])).toEqual(['src/AGENTS.md']);
+  });
+
+  it('counts a name in another letter case as not loaded where the file system minds case', () => {
+    const m = manifest([file('Agents.md')]);
+    expect(paths(m, 'codex', [], { caseInsensitive: true })).toEqual([]);
+    expect(paths(m, 'codex', [], { caseInsensitive: false })).toEqual(['Agents.md']);
+    expect(paths(m, 'antigravity', [], { caseInsensitive: false })).toEqual(['Agents.md']);
+  });
+
+  it('counts the bytes Windows line endings add toward what an engine loads', () => {
+    expect(paths(manifest([file('AGENTS.md', { size: 31_000, lineBreaks: 1_800 })]), 'codex', [])).toEqual(['AGENTS.md']);
+    expect(paths(manifest([file('AGENTS.md', { size: 31_000, lineBreaks: 0 })]), 'codex', [])).toEqual([]);
+    expect(paths(manifest([file('GEMINI.md', { size: 23_000, lineBreaks: 1_500 })]), 'antigravity', [])).toEqual(['GEMINI.md']);
+  });
+
+  it('points Claude at a committed CLAUDE.local.md, which workers do not load', () => {
+    expect(paths(manifest([file('CLAUDE.local.md'), file('CLAUDE.md')]), 'claude', [])).toEqual(['CLAUDE.local.md']);
   });
 
   it('tells engines to read in full what they would cut', () => {
@@ -144,6 +167,36 @@ describe('rules for a task', () => {
     const m = manifest([file('sub/CLAUDE.md', { pointsTo: 'sub/AGENTS.md' }), file('sub/AGENTS.md')]);
     expect(rulesForTask(m, { owns: ['sub/x.ts'] }, 'claude').pointers).toEqual([{ path: 'sub/AGENTS.md', folder: 'sub', reason: 'link-target', via: 'sub/CLAUDE.md' }]);
     expect(paths(m, 'codex', ['sub/x.ts'])).toEqual(['sub/AGENTS.md']);
+  });
+
+  it('never points at a link, or through one', () => {
+    // A one-line pointer to a rule file that is itself a link leading out of the repository.
+    const out = manifest([file('CLAUDE.md', { pointsTo: 'sub/AGENTS.md' }), file('sub/AGENTS.md', { link: { target: '../../../../etc/passwd', resolved: null } })]);
+    for (const engine of ['claude', 'codex', 'antigravity'] as const) expect(paths(out, engine, ['sub/x.ts']), engine).toEqual([]);
+    // A rule file linking to another rule file that is a link: only a regular file's path is ever given.
+    const chain = manifest([file('CLAUDE.md', { link: { target: 'AGENTS.md', resolved: 'AGENTS.md' } }), file('AGENTS.md', { link: { target: 'docs/x.md', resolved: 'docs/x.md' } })], true);
+    expect(paths(chain, 'claude', [])).toEqual(['docs/x.md']);
+  });
+
+  it("follows imports up to Claude's four hops", () => {
+    const m = manifest(
+      [file('CLAUDE.md', { imports: ['docs/a.md'] })],
+      false,
+      [importedFile('docs/a.md', ['docs/b.md']), importedFile('docs/b.md', ['docs/c.md']), importedFile('docs/c.md', ['docs/d.md']), importedFile('docs/d.md', ['docs/e.md']), importedFile('docs/e.md')],
+    );
+    expect(rulesForTask(m, { owns: [] }, 'codex').pointers.map((p) => [p.path, p.via])).toEqual([
+      ['CLAUDE.md', null],
+      ['docs/a.md', 'CLAUDE.md'],
+      ['docs/b.md', 'docs/a.md'],
+      ['docs/c.md', 'docs/b.md'],
+      ['docs/d.md', 'docs/c.md'],
+    ]);
+    // Claude reaches an AGENTS.md imported two hops down by itself.
+    const deep = manifest([file('CLAUDE.md', { imports: ['docs/a.md'] }), file('AGENTS.md')], false, [importedFile('docs/a.md', ['AGENTS.md'])]);
+    expect(paths(deep, 'claude', [], OLD_CLAUDE)).toEqual([]);
+    // Imports that loop end.
+    const loop = manifest([file('CLAUDE.md', { imports: ['docs/a.md'] })], false, [importedFile('docs/a.md', ['docs/b.md']), importedFile('docs/b.md', ['docs/a.md'])]);
+    expect(paths(loop, 'codex', [])).toEqual(['CLAUDE.md', 'docs/a.md', 'docs/b.md']);
   });
 
   it("points other engines at a CLAUDE.md's imports that exist in the repository", () => {
