@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runWorker, type WorkerOptions } from '../../src/engines/worker.js';
-import { createRun, readOutput, readRunLog, type RunStore, type StoreOptions } from '../../src/store/run.js';
+import { createRun, readBrief, readOutput, readRunLog, type RunStore, type StoreOptions } from '../../src/store/run.js';
 import type { TaskWorktree } from '../../src/worktree/manager.js';
 import { fakeEnv, installFakeEngine } from '../helpers/fake-engine.js';
 import { BASE, NOW, sampleReady, type SampleTask } from '../helpers/store.js';
@@ -542,6 +542,28 @@ describe('runWorker and the store', () => {
     expect(outcome.status).toBe('completed');
     expect(outcome.storeProblems.some((p) => p.includes('could not be recorded'))).toBe(true);
     expect(outcome.storeProblems.some((p) => p.includes('log could not be written'))).toBe(true);
+  });
+});
+
+describe('runWorker and the brief', () => {
+  it("keeps the round's brief in the run folder before the worker starts", async () => {
+    const s = await setup();
+    const fake = installFakeEngine(s.bin, 'claude', { run: { stdout: CLAUDE_OK } });
+    await runWorker(options(s, 'api', { brief: '<orchestra_brief>round 0</orchestra_brief>' }));
+    await runWorker(options(s, 'api', { round: 1, brief: '<orchestra_brief>round 1</orchestra_brief>' }));
+    expect(fake.calls().map((c) => c.stdin)).toEqual(['<orchestra_brief>round 0</orchestra_brief>', '<orchestra_brief>round 1</orchestra_brief>']);
+    expect(await readBrief(s.home, RUN, 'api', 0)).toEqual({ ok: true, value: '<orchestra_brief>round 0</orchestra_brief>' });
+    expect(await readBrief(s.home, RUN, 'api', 1)).toEqual({ ok: true, value: '<orchestra_brief>round 1</orchestra_brief>' });
+  });
+
+  it('never starts a worker whose brief could not be kept', async () => {
+    const s = await setup({ maxBriefBytes: 10 });
+    const fake = installFakeEngine(s.bin, 'claude', { run: { stdout: CLAUDE_OK } });
+    const outcome = await runWorker(options(s, 'api', { brief: 'x'.repeat(11) }));
+    expect(outcome.status).toBe('not-started');
+    expect(outcome.error).toContain('The brief could not be saved, so the worker was not started');
+    expect(fake.calls()).toEqual([]);
+    expect(s.store.state.tasks.find((t) => t.id === 'api')?.workers).toEqual([]);
   });
 });
 

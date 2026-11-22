@@ -90,6 +90,8 @@ const MIB = 1024 * 1024;
 export const MAX_FILE_BYTES = { plan: 32 * MIB, state: 16 * MIB, finalize: 64 * MIB, gate: 32 * MIB } as const;
 export type FileLimits = { readonly [K in keyof typeof MAX_FILE_BYTES]: number };
 export const DEFAULT_MAX_DIFF_BYTES = 4 * MIB;
+/** Briefs are rendered with every part capped (brief/render.ts); this is far above what one comes to. */
+export const DEFAULT_MAX_BRIEF_BYTES = MIB;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const DIFF_MARKER = /\n\[\.\.\. diff cut at \d+ bytes by Orchestra \.\.\.\]\n$/;
 
@@ -98,6 +100,7 @@ export interface StoreOptions {
   readonly maxLogBytes?: number;
   readonly maxOutputBytes?: number;
   readonly maxDiffBytes?: number;
+  readonly maxBriefBytes?: number;
   /** Size limits per file kind, for the writer and the readers alike (default MAX_FILE_BYTES). */
   readonly maxFileBytes?: Partial<FileLimits>;
   /** Tests only: replaces fs.rename in atomic writes, to simulate a failure between the write and the rename. */
@@ -499,6 +502,22 @@ export class RunStore {
   }
 
   /**
+   * Saves the brief a task's worker gets in one round, as given (step 11). The worker runner saves it before the
+   * start, so the run folder shows what each worker was told. A brief over the limit is refused, not cut.
+   */
+  saveBrief(taskId: string, round: number, brief: string): Promise<StoreResult<{ bytes: number }>> {
+    return this.enqueue(async () => {
+      const bad = this.roundCheck<{ bytes: number }>(taskId, round);
+      if (bad !== null) return bad;
+      const folder = await this.taskFolderFor(taskId);
+      if (!folder.ok) return folder;
+      const maxBytes = this.opts.maxBriefBytes ?? DEFAULT_MAX_BRIEF_BYTES;
+      const written = await writeFileAtomic(roundFile(this.paths, taskId, 'brief', round), brief, { ...atomicOptions(this.opts), maxBytes });
+      return written.ok ? { ok: true, value: { bytes: Buffer.byteLength(brief) } } : written;
+    });
+  }
+
+  /**
    * Starts a capped file for a worker's output in one round (step 10 writes to it as the worker prints). A
    * file left by an earlier attempt at the same round is replaced.
    */
@@ -601,6 +620,17 @@ export function readDiff(home: string, runId: string, taskId: string, round: num
     if (!read.ok) return read;
     const text = read.value.toString('utf8');
     return { ok: true, value: { text, truncated: DIFF_MARKER.test(text) } };
+  });
+}
+
+export function readBrief(home: string, runId: string, taskId: string, round: number, opts: StoreOptions = {}): Promise<StoreResult<string | null>> {
+  return readOptional(home, runId, async (paths) => {
+    const bad = taskFileCheck<string>(runId, taskId, round);
+    if (bad !== null) return bad;
+    const folders = await taskFolders(paths, taskId);
+    if (folders !== null) return problem(folders);
+    const read = await readFileCapped(roundFile(paths, taskId, 'brief', round), opts.maxBriefBytes ?? DEFAULT_MAX_BRIEF_BYTES);
+    return read.ok ? { ok: true, value: read.value.toString('utf8') } : read;
   });
 }
 

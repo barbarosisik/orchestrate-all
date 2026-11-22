@@ -25,6 +25,7 @@ import {
   listRuns,
   loadRun,
   openRun,
+  readBrief,
   readDiff,
   readFinalizeReport,
   readGate,
@@ -761,5 +762,33 @@ describe('openRun', () => {
     rmSync(join(runFolder(home), 'log.jsonl'));
     expect(code(await readRunLog(home, RUN))).toBe('missing');
     expect(code(await openRun(home, RUN))).toBe('missing');
+  });
+});
+
+describe('saveBrief', () => {
+  it("keeps each round's brief as written, and reads it back", async () => {
+    const home = tempHome();
+    const store = await create(home);
+    const brief = '<orchestra_brief task="api">\nDo the work: café, 😀\n</orchestra_brief>\n';
+    expect(await store.saveBrief('api', 0, brief)).toEqual({ ok: true, value: { bytes: Buffer.byteLength(brief) } });
+    expect(await store.saveBrief('api', 1, 'second')).toEqual({ ok: true, value: { bytes: 6 } });
+    expect(readFileSync(join(runFolder(home), 'tasks', 'api', 'brief-0.md'), 'utf8')).toBe(brief);
+    expect(await readBrief(home, RUN, 'api', 0)).toEqual({ ok: true, value: brief });
+    expect(await readBrief(home, RUN, 'api', 1)).toEqual({ ok: true, value: 'second' });
+    expect(await readBrief(home, RUN, 'api', 2)).toEqual({ ok: true, value: null });
+    expect(await readBrief(home, RUN, 'ui', 0)).toEqual({ ok: true, value: null });
+  });
+
+  it('refuses a brief over the limit, odd names and rounds, and tasks not in the plan', async () => {
+    const home = tempHome();
+    const store = await create(home, sampleReady(TASKS), { maxBriefBytes: 10 });
+    expect(code(await store.saveBrief('api', 0, 'x'.repeat(11)))).toBe('too-large');
+    expect(existsSync(join(runFolder(home), 'tasks', 'api', 'brief-0.md'))).toBe(false);
+    expect(code(await store.saveBrief('api', -1, 'x'))).toBe('bad-name');
+    expect(code(await store.saveBrief('../x', 0, 'x'))).toBe('bad-name');
+    expect(code(await store.saveBrief('nope', 0, 'x'))).not.toBe('ok');
+    expect(code(await readBrief(home, RUN, 'api', 100))).toBe('bad-name');
+    writeFileSync(join(runFolder(home), 'tasks', 'api', 'brief-3.md'), 'y'.repeat(20));
+    expect(code(await readBrief(home, RUN, 'api', 3, { maxBriefBytes: 10 }))).toBe('too-large');
   });
 });

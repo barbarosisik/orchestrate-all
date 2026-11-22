@@ -9,7 +9,8 @@
  *    (env.ts) and the brief on stdin. Nothing is written to disk for the engine to read at start (a settings
  *    file in a shared folder could be rewritten by another engine's worker first). The folder is checked again
  *    right before the start, and a cancel that came while the run was being prepared is honoured.
- * 3. Its raw output goes to the run folder as it comes (store.openOutput, capped), and its stdout is read as
+ * 3. The brief (step 11's renderBrief) is saved to the run folder first; if it can't be, the worker doesn't start.
+ *    Its raw output goes to the run folder as it comes (store.openOutput, capped), and its stdout is read as
  *    JSON events by the engine's adapter (a line too long to read is skipped and counted).
  * 4. The store records the worker run before the start (endedAt null, so a crash shows it never finished) and
  *    again at the end, with exit code, error and tokens; the log gets "started" and "finished".
@@ -363,6 +364,9 @@ async function supervise(
   const timeoutMs = timerDelay(opts.timeoutMs, DEFAULT_WORKER_TIMEOUT_MS);
   const storeProblems: string[] = [];
 
+  // The brief first: the run folder must show what the worker was told before it starts.
+  const savedBrief = await store.saveBrief(taskId, round, opts.brief);
+  if (!savedBrief.ok) return notStarted(`The brief could not be saved, so the worker was not started: ${savedBrief.problem.message}`, engine, model, refused);
   const out = await store.openOutput(taskId, round, 'stdout');
   if (!out.ok) return notStarted(`The worker's output file could not be opened: ${out.problem.message}`, engine, model, refused);
   const err = await store.openOutput(taskId, round, 'stderr');
