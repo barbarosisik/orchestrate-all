@@ -16,11 +16,14 @@ export interface RuleImport {
   readonly external: boolean;
 }
 
+// Every scan here is linear: rule files come from the repository, and a crafted line must not make a
+// backtracking regular expression run for minutes while the conductor waits.
 const IMPORT = /(?:^|[\s(])@([^\s]+)/g;
-const TRAILING = /[.,;:!?)\]}'"]+$/;
+const TRAILING = new Set(['.', ',', ';', ':', '!', '?', ')', ']', '}', "'", '"']);
 const FENCE = /^\s{0,3}(```|~~~)/;
-const CODE_SPAN = /(`+)[\s\S]*?\1/g;
 const ABSOLUTE = /^(?:[\\/]|[A-Za-z]:)/;
+/** Longer tokens are not taken for paths. */
+const MAX_IMPORT_CHARS = 1000;
 
 /**
  * A path relative to `folder` (repo-relative, '' for the top), as a repo-relative path with "/" separators, or
@@ -48,6 +51,65 @@ function looksLikePath(raw: string): boolean {
   return raw.includes('/') || raw.includes('.') || raw.startsWith('~');
 }
 
+function withoutTrailingPunctuation(raw: string): string {
+  let end = raw.length;
+  while (end > 0 && TRAILING.has(raw[end - 1] as string)) end -= 1;
+  return raw.slice(0, end);
+}
+
+/**
+ * The line without its code spans: a run of backticks opens one, and the next run of the same length closes it; a
+ * run with no partner is plain text (as in CommonMark). Each run's partner is found in one pass from the end.
+ */
+function withoutCodeSpans(line: string): string {
+  if (!line.includes('`')) return line;
+  const runs: { start: number; end: number }[] = [];
+  for (let i = 0; i < line.length; ) {
+    if (line[i] !== '`') {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < line.length && line[j] === '`') j += 1;
+    runs.push({ start: i, end: j });
+    i = j;
+  }
+  const partner = new Array<number>(runs.length).fill(-1);
+  const nextOfLength = new Map<number, number>();
+  for (let k = runs.length - 1; k >= 0; k--) {
+    const run = runs[k] as { start: number; end: number };
+    partner[k] = nextOfLength.get(run.end - run.start) ?? -1;
+    nextOfLength.set(run.end - run.start, k);
+  }
+  let out = '';
+  let kept = 0;
+  for (let k = 0; k < runs.length; ) {
+    const close = partner[k] as number;
+    if (close === -1) {
+      k += 1;
+      continue;
+    }
+    out += line.slice(kept, (runs[k] as { start: number }).start);
+    kept = (runs[close] as { end: number }).end;
+    k = close + 1;
+  }
+  return out + line.slice(kept);
+}
+
+/** The text without HTML comments; an unclosed one runs to the end. */
+function withoutComments(text: string): string {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('<!--', pos);
+    if (open === -1) return out + text.slice(pos);
+    out += text.slice(pos, open);
+    const close = text.indexOf('-->', open + 4);
+    if (close === -1) return out;
+    pos = close + 3;
+  }
+}
+
 /** Lines outside fenced code blocks, with code spans removed. */
 function proseLines(text: string): string[] {
   const lines: string[] = [];
@@ -59,7 +121,7 @@ function proseLines(text: string): string[] {
       else if (fence === marker) fence = null;
       continue;
     }
-    if (fence === null) lines.push(line.replace(CODE_SPAN, ''));
+    if (fence === null) lines.push(withoutCodeSpans(line));
   }
   return lines;
 }
@@ -71,7 +133,9 @@ export function claudeImports(text: string, filePath: string): RuleImport[] {
   const seen = new Set<string>();
   for (const line of proseLines(text)) {
     for (const match of line.matchAll(IMPORT)) {
-      const raw = (match[1] as string).replace(TRAILING, '');
+      const token = match[1] as string;
+      if (token.length > MAX_IMPORT_CHARS) continue;
+      const raw = withoutTrailingPunctuation(token);
       if (raw.length === 0 || !looksLikePath(raw)) continue;
       const external = raw.startsWith('~') || ABSOLUTE.test(raw);
       const path = external ? null : resolveRepoPath(folder, raw);
@@ -86,10 +150,9 @@ export function claudeImports(text: string, filePath: string): RuleImport[] {
 
 /** True when the text holds imports and nothing else (blank lines and HTML comments aside). */
 export function importsOnly(text: string): boolean {
-  const lines = text
-    .replace(/<!--[\s\S]*?-->/g, '')
+  const lines = withoutComments(text)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  return lines.length > 0 && lines.every((line) => /^(?:@\S+\s*)+$/.test(line));
+  return lines.length > 0 && lines.every((line) => line.split(/\s+/).every((token) => token.length > 1 && token.startsWith('@')));
 }

@@ -49,6 +49,28 @@ describe('Claude @imports', () => {
     expect(importsOnly('')).toBe(false);
   });
 
+  it('handles crafted lines in linear time', () => {
+    // Each of these took minutes or hours with backtracking regular expressions.
+    const started = performance.now();
+    expect(importsOnly(`${'@a'.repeat(5000)} b`)).toBe(false);
+    expect(importsOnly(`${'@a '.repeat(5000)}`)).toBe(true);
+    expect(claudeImports(`@a${'.'.repeat(200_000)}b`, 'CLAUDE.md')).toEqual([]);
+    expect(claudeImports(`x${'`'.repeat(200_000)} @real.md`, 'CLAUDE.md').map((i) => i.path)).toEqual(['real.md']);
+    expect(claudeImports(`${'`a'.repeat(100_000)} @b.md`, 'CLAUDE.md').map((i) => i.path)).toEqual(['b.md']);
+    expect(importsOnly(`${'<!--'.repeat(100_000)}\n@a.md`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(3000);
+  });
+
+  it('follows the code span rules: runs of the same length pair up, an unpaired run is plain text', () => {
+    expect(claudeImports('``a ` @x.md `` @y.md', 'CLAUDE.md').map((i) => i.path)).toEqual(['y.md']);
+    expect(claudeImports('` @x.md', 'CLAUDE.md').map((i) => i.path)).toEqual(['x.md']);
+    expect(claudeImports('`a` @x.md `b`', 'CLAUDE.md').map((i) => i.path)).toEqual(['x.md']);
+  });
+
+  it('skips tokens too long to be a path', () => {
+    expect(claudeImports(`@${'a/'.repeat(600)}x.md`, 'CLAUDE.md')).toEqual([]);
+  });
+
   it('resolves repository paths and refuses ones that leave it', () => {
     expect(resolveRepoPath('a/b', '../c.md')).toBe('a/c.md');
     expect(resolveRepoPath('', 'x//y/./z.md')).toBe('x/y/z.md');
