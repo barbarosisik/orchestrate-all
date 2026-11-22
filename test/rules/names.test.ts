@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_RESERVED_PATTERNS } from '../../src/config/defaults.js';
+import { parseOwnsEntry } from '../../src/plan/paths.js';
+import { compilePatterns } from '../../src/plan/reserved.js';
 import { classifyRulePath, ruleNamePathspecs } from '../../src/rules/names.js';
 
 describe('rule file names', () => {
@@ -53,6 +56,30 @@ describe('rule file names', () => {
 
   it('keeps the folder as stored', () => {
     expect(classifyRulePath('Src/Api/AGENTS.md')?.folder).toBe('Src/Api');
+  });
+
+  it('reserves every kind of rule file, so no ordinary task can change one during a run', () => {
+    const reserved = compilePatterns(DEFAULT_RESERVED_PATTERNS);
+    const samples = [
+      'AGENTS.md',
+      'src/AGENTS.md',
+      'pkg/AGENTS.override.md',
+      'web/CLAUDE.md',
+      'web/.claude/CLAUDE.md',
+      'CLAUDE.local.md',
+      'web/.claude/rules/x.md',
+      'lib/GEMINI.md',
+      'lib/.agents/AGENTS.md',
+      'lib/.agents/rules/x.md',
+      'lib/.agent/rules/x.md',
+      'Lib/Agents.md',
+    ];
+    for (const path of samples) {
+      expect(classifyRulePath(path), path).not.toBeNull();
+      const parsed = parseOwnsEntry(path);
+      if (!parsed.ok) throw new Error(path);
+      expect(reserved.match(parsed.entry), path).not.toBeNull();
+    }
   });
 
   it('gives git pathspecs that cover every kind', () => {

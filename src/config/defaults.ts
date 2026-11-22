@@ -43,6 +43,7 @@ export const DEFAULT_RESERVED_PATTERNS: readonly string[] = [
   '.mcp.json',
   '.codex/',
   '.agents/',
+  '.agent/',
   '.gemini/',
   '.cursor/',
   '.vscode/',
