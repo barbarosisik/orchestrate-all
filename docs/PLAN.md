@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) in progress: the Windows Job Object is done (2026-11-22). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) in progress: the Windows Job Object is done (2026-11-22); step 11 (rules manifest and briefs) done (2026-11-22). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -62,6 +62,8 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Finalize | Merge commit into your branch, with your identity and hooks; it must produce the tree the finalize checks tested |
 | Limits | 3 parallel workers; 30 minutes per task; 10 minutes per acceptance command; 2 revision rounds per task |
 | Acceptance commands | Run by the conductor without a shell; programs found in PATH only, never in the worktree. On Windows, npm and npx run through node, and other `.cmd`/`.bat` files only with arguments cmd.exe can't act on. They get an allowlisted environment (no API keys or tokens) plus `CI=true`. Output is kept up to 256 KiB per stream. |
+| Project rules for workers | Each engine loads the project's rule files itself. Before planning, the conductor lists every rule file in the base commit and the files they import (and, as warnings, the ones only in your checkout, links checked out as text or leading out of the repository, files over an engine's limit, hidden characters, a CLAUDE.md that differs from its AGENTS.md), and your personal rule files. Orchestra never follows a link, nor points a worker through one. The orchestrator gets that list, never the rule text. Each brief points its worker, by path, at the rule files that apply to its files and that its engine won't load by itself, plus one fixed precedence paragraph. Uncommitted and ignored rule files are shown, never given to workers. |
+| Briefs | One fixed template rendered by code from the approved plan: the files the task may change, the reserved files, the constraints, the acceptance commands, when to stop, and the result format. Text from the plan and from earlier workers can't end its block. Each round's brief is saved in the run folder before the worker starts. Every worker ends with one JSON result, which is only its own account: the conductor checks the diff and runs the commands itself. |
 | Approval | A native Windows dialog shown by the conductor |
 | `.env` copying | Never, unless you opt in per repo |
 | Ignored files in a task's worktree | Listed in the scope report (marked when inside the task's owned paths), never committed, not counted as a violation |
@@ -85,7 +87,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 9 | Run store (run folder layout) | ☁ | done |
 | 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines; worker runs into the run folder; agent config folders compared | ☁ | done (part 1) |
 | 10b | Containment: an OS sandbox around each whole worker (only its worktree writable), a Windows Job Object for leftover processes; the engine flags checked on your machine | 🖥 | Job Object done |
-| 11 | Rules manifest + brief builder | ☁ | |
+| 11 | Rules manifest + brief builder | ☁ | done |
 | 12 | Daemon (lazy start, token, crash recovery) | ☁ | |
 | 13 | Approval dialog | 🖥 | |
 | 14 | MCP shim + `orchestrate-all` skill + installer for both front doors | ☁ then 🖥 | |

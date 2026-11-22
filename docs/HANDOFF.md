@@ -41,15 +41,16 @@ treat it as background only: where it disagrees with this file or PLAN.md, these
 | Step 9: run store (the run folder `<home>/runs/<runId>`: approved plan and hash, the run's state, the last finalize report, a capped JSON Lines log of decisions, and per task and round the worker's output, the gate and the commit's diff; atomic writes, no links, everything read back checked against its schema and the plan; enough to carry on after a crash) | `src/store/` |
 | Step 10, part 1: engines (detection at the start of a run: installed, version, signed in or on the API key, through each CLI's own status command; one adapter per engine: command line, worker environment without billing variables, brief on stdin, event stream read into tokens, refusals, final result and violations; worker runs saved into the run folder, with a time limit and cancellation that stop the whole process tree; the agents' own config folders compared before and after each worker) | `src/engines/`, `src/os/process-tree.ts` |
 | Step 10, part 2, first piece: Job Objects (every process Orchestra starts on Windows, workers, acceptance commands and detection probes, runs in a Job Object of its own, so everything it starts is stopped at a time limit, on cancel, when it exits and when Orchestra stops or crashes, also processes whose parent already exited; the job is made before the start, so without one nothing starts, and a process that can't be put in it is stopped at once and never gets its input; Linux and macOS keep the process group, behind the same interface) | `src/os/job.ts`, `src/os/process-tree.ts` |
-| Tests: 923 passing on macOS (10 more run only on Windows); CI runs Windows + Linux (Node 22 and 24); engines are tested against fake engines only | `test/`, `.github/workflows/ci.yml` |
+| Step 11: rules and briefs (the rules manifest: every agent rule file in the base commit, with its links (never followed: a link resolves only to a regular file in the repository) and imports (four hops, like Claude), warnings for what workers won't see or what could mislead them, the rule files only in the user's checkout, and the user's personal rule files; for each task and engine, the rule files its worker must read because its engine won't load them; the brief rendered from one fixed template, worded per engine, every part bounded, with text from the plan and from earlier workers kept inside its block; the JSON result every worker ends with; each round's brief saved in the run folder before the worker starts) | `src/rules/`, `src/brief/` |
+| Tests: 1070 passing on macOS (10 more run only on Windows); CI runs Windows + Linux (Node 22 and 24); engines are tested against fake engines only | `test/`, `.github/workflows/ci.yml` |
 
 **CI** runs on pull requests and on pushes to `main`. Steps 3–5 went into `dev` through PR #1, step 6 through PR #2,
 step 7 through PR #3, step 8 through PR #4, step 9 through PR #5, step 10's first part through PR #6 and the Job
-Object through PR #7, all green on Windows and Linux (the first runs found test-only problems: git's `C:/` paths,
+Object through PR #7, step 11 through PR #8, all green on Windows and Linux (the first runs found test-only problems: git's `C:/` paths,
 hidden `.git` files, Linux running a script without `#!` through `sh`, a Windows folder held by a test's process, in
 step 8 a test that assumed letter case is ignored, as on Windows and macOS but not Linux, in step 10 a test program
 without a Windows extension, and for the Job Object a test expecting a detached process to outlive its command on
-Windows, which the job now stops).
+Windows, which the job now stops; step 11's first Windows run passed).
 
 **Review:** an independent review of steps 3–5 found 9 problems (a `git.exe` planted in a worktree, task branches turned
 into links to the user's branch, rewritten git objects, unwatched included config, links in Orchestra's folders, a
@@ -70,12 +71,29 @@ path per engine, and `mayStillBeRunning`). An independent review of the Job Obje
 whose leftover Node itself stops; the job made only after the start, with koffi loaded then, which left up to about
 100 ms for an acceptance command's code to start something outside it; the docs calling it containment; a `taskkill`
 fallback by process id, which could reach another process). All are fixed, and so are its smaller points (a pid file
-read as 0 in tests, koffi type names declared twice, a test that checked nothing).
+read as 0 in tests, koffi type names declared twice, a test that checked nothing). An independent review of step 11
+found 9 problems: regular expressions a crafted CLAUDE.md could make run for hours (imports, trailing punctuation,
+code spans) and one in the result parser; workers pointed through links to files outside the repository (an import or
+one-line pointer naming a link, a link to a link) while the manifest said links can't be followed; link targets and
+import names pasted raw into the manifest text, where they could pose as its lines; a brief that contradicted itself
+(a reserved task told to stop at reserved files, "a concrete change" for a read-only Codex task, Antigravity told to
+run commands its headless mode refuses); briefs that grew past the run folder's limit with hidden characters; an
+empty AGENTS.override.md handled differently below the top, names in another letter case and Windows line endings
+not counted against the engines' limits, imports followed one hop only, a committed CLAUDE.local.md counted as loaded;
+the legacy `.agent/` folder not reserved; an uncapped file listing. All are fixed and each has a test; so are its
+smaller points (variation selectors and hidden characters in names). While fixing them, invisible characters that had
+been written literally into code and tests were replaced by escapes.
 
 ### How steps 3–10 fit together (for the run manager later)
 
 Before planning: `detectEngines()` (step 10, `src/engines/detect.ts`) says which engines are ready. The plan may only
-use those (`defaultValidationContext(detection.ready)`); show the user each engine's `problems` and `warnings`.
+use those (`defaultValidationContext(detection.ready)`); show the user each engine's `problems` and `warnings`. Then
+`buildRulesManifest(ctx, { baseSha, home: os.homedir(), env: process.env })` (step 11, `src/rules/manifest.ts`) lists
+the project's rule files; `formatRulesManifest(manifest)` is the text the orchestrator gets (paths and warnings, never
+the rule text) and the user sees at approval. Rule files are reserved paths, so the manifest of the base commit holds
+for the whole run. The files rule files import (`manifest.imported`) are not reserved by pattern: add their paths to
+the plan's reserved paths before validating (escaping `*`, `?` and `[`, which reserved patterns read as wildcards), or
+a task that owns them could change what later Claude workers load.
 
 0. Once the plan is approved: `createRun(home, { runId: newRunId(), ready, hooks: ctx.hooks, caseInsensitivePaths:
    ctx.caseInsensitivePaths, review: { maxRevisionRounds, threshold } })` makes the run folder and returns its
@@ -89,7 +107,14 @@ use those (`defaultValidationContext(detection.ready)`); show the user each engi
 1. `createTaskWorktree(ctx, { runId, taskId, startSha })`: `startSha` comes from `startCommitFor(task, baseSha, integrationTip)`.
    Record it (`startSha`, status "working").
 2. `takeBaseline(ctx)` and `snapshotAgentConfig({ home: os.homedir(), env: process.env })` before the worker starts.
-3. `runWorker({ store, worktree: wt, round, brief, shell, signal })` (step 10, `src/engines/worker.ts`) runs the task's
+3. The brief (step 11, `src/brief/render.ts`): `renderBrief({ plan: store.record.plan, taskId, startSha, round, rules:
+   rulesForTask(manifest, task, task.engine, { claudeVersion }), reservedPatterns: DEFAULT_RESERVED_PATTERNS, shell,
+   upstream, revision })`, where `claudeVersion` is detection's version for Claude, `upstream` holds each merged
+   dependency's commit, the files it changed (from the conductor's own diff) and its worker's result
+   (`parseWorkerResult(outcome.report.result, id)`, `src/brief/result.ts`), and `revision` is `revisionRequest(state)`
+   in a revision round. Then `runWorker({ store, worktree: wt, round, brief, shell, signal })` (step 10,
+   `src/engines/worker.ts`) saves the brief in the run folder (`brief-<round>.md`; if it can't, the worker doesn't
+   start) and runs the task's
    engine and model from the plan, in this task's worktree only (on Windows inside a Job Object, or not at all). It
    records the worker run in the task's `workers` before the start (so a crash shows it never ended) and at the end
    (exit code, error, tokens), logs `worker` started/finished, and saves the raw output with `store.openOutput`. `outcome.status` is "completed" only when the
@@ -137,7 +162,12 @@ use those (`defaultValidationContext(detection.ready)`); show the user each engi
 `ctx` comes from `repoContext(readyPlan)`. All git goes through `src/git/run.ts` via `repoGit`/`worktreeGit`, which name
 the git folder explicitly and turn hooks off unless the user allows them.
 
-## Next: step 10, part 2: containment (the rest)
+## Next: step 12, or the rest of step 10 part 2
+
+Step 11 is done. The owner chooses what comes next: **step 12** (the background service, below the list) can be built
+without the engines; **the rest of step 10 part 2** needs `claude`, `codex` and `agy` installed on the owner's machine.
+
+### Step 10, part 2: containment (the rest)
 
 Part 1 built detection, the adapters and worker runs (tested against fake engines). Part 2's first piece, the Windows
 Job Object, is done (`src/os/job.ts`). What is left needs the owner's machine:
@@ -164,19 +194,18 @@ Job Object, is done (`src/os/job.ts`). What is left needs the owner's machine:
   usable version. On Windows, inside the Job Object (no breakaway): whether browser tests in acceptance commands
   (Playwright, Puppeteer: Chromium's sandbox uses jobs of its own) still work, and that build daemons (Gradle, MSBuild
   node reuse) are now stopped when the command that started them exits, as on Linux and macOS when they stay in the
-  process group.
+  process group. And how each engine loads rule files in a worktree (see "Not covered yet": rule loading).
 - **Tests:** the sandbox gets fake-engine tests that try to write outside the worktree; CI runs them on Linux. (The
   Job Object's tests leave processes behind, also detached ones, and run on Windows CI.)
 
-After that, one line each (details in PLAN.md):
+### The steps after that, one line each (details in PLAN.md)
 
-11. **Rules and briefs:** find each project's rule files and write each worker's brief from a fixed template.
 12. **Background service:** one local service, so a run started from Claude is visible from Codex.
 13. **Approval:** the start/finalize confirmation (see open decisions).
 14. **Front doors:** the `/orchestrate-all` skill plus the MCP connection for Claude Code and Codex, and an installer.
 15. **Real-world test:** on the owner's machine, then a full demo.
 
-## Not covered yet by steps 3–10
+## Not covered yet by steps 3–11
 
 - **Checks beyond the repository.** The agents' own config folders are compared before and after each worker (step
   10). The user's main checkout files are not (research §7.5): only git's own config and attributes files and the
@@ -212,7 +241,37 @@ After that, one line each (details in PLAN.md):
   not from runs (research §10).
 - **Claude Code's version** is read once per run by detection; a CLI that updates itself during a run is not checked
   again.
-- **Briefs** are step 11: `runWorker` takes the brief as text.
+- **Rule loading comes from the engines' docs, not runs** (step 11, research §4.2): that Claude Code reads AGENTS.md
+  from 2.1.277 where no CLAUDE.md is in charge, that Codex loads only the top folder's AGENTS.md in a worktree (a
+  worktree's `.git` is a file) and stops at 32 KiB, that Antigravity loads no subfolders and cuts files at 24,000
+  bytes. Check them with the engines (step 10 part 2). Also check whether a Claude worker loads a `CLAUDE.md` in a
+  folder above its worktree (worktrees are under the user's home, so `~/CLAUDE.md` would count), whether it loads a
+  committed `CLAUDE.local.md` with `--setting-sources project` (assumed not, so it is pointed at), and what Codex does
+  next to an empty `AGENTS.override.md` (assumed unknown, so the AGENTS.md is pointed at).
+- **Pointers, not launch flags:** research §4.5 also suggests closing gaps with each engine's own flags (Codex
+  `-c project_doc_fallback_filenames`, Claude `--settings` with both instruction files); they can't be checked without
+  the engines, so briefs point at the files by path instead.
+- **Rules manifest limits:** at most 500 files are read (rule files first, then the files they import), 1 MiB each and
+  16 MiB together (the rest are listed as unchecked); a base commit whose file list is over 256 MiB is refused; rule
+  files inside a folder that git ignores as a whole are not listed; the tree listing is git's (only the files read are
+  checked against their ids), which is fine at plan time, before any worker ran. Imports are followed from Claude rule
+  files and the files they import, not from an AGENTS.md that a CLAUDE.md imports. Personal rule files that are links
+  are listed but not opened. Comparing the user's copies opens no link as the file itself, but a link in a folder on
+  the way (two folders differing only in letter case, one a link) is followed; only files named like rule files are
+  opened, and only "differs or not" comes out. Clashes between personal rule files and Orchestra's flow ("always
+  commit") are not detected; the brief's precedence paragraph and the scope check cover them.
+- **Links leading out of the repository:** Orchestra never follows one or points a worker through one, but an engine
+  that loads a rule file stored as such a link follows it (where links are real), to whatever file it names; worktrees
+  are at a predictable place, so a hostile repository can aim at the user's own files. The manifest warns and tells
+  the user to remove the link; whether to refuse the run instead is an open decision.
+- **Hidden characters:** rule files with them are flagged at plan time, but workers are still pointed at them (and
+  engines load the ones they load by themselves); the user decides after seeing the warning.
+- **Uncommitted, untracked and ignored rule files** are shown at plan time and never given to workers (see open
+  decisions).
+- **Worker results** are the worker's own account. `parseWorkerResult` reads them, but the run state doesn't keep them
+  yet: the run manager (step 12) must keep each accepted task's result for its dependents' briefs (or parse it again
+  from the saved output) and compare its `files_changed` with the real diff. The interfaces dependents see are the
+  worker's claims, quoted as data, not extracted from the merged tree by the conductor.
 - **The object store.** A worker that can write to the repository's `.git/objects` can damage it. The scope check
   re-hashes every tree it relies on, so this can't hide an out-of-scope change, but file contents (blobs) are not
   re-hashed. For step 10 part 2: sandbox workers so they can write only their own worktree folder. The conductor
@@ -290,6 +349,13 @@ Ask the owner only when the work needs the answer, one question at a time.
   finished runs after some time, or keep them all?
 - **macOS:** this clone is on the owner's Mac, while the docs and CI target Windows first. Should CI also run on macOS
   (macOS runner minutes cost more on private repositories)?
+
+- **Rule files that lead out of the repository** (a rule file stored as a link to a file outside it, which an engine
+  follows where links are real): today the manifest warns and says to remove the link. Refuse the run instead
+  (recommended: a hostile repository could aim such a link at the user's sign-ins), or keep warning?
+- **Rule files workers won't see** (uncommitted, untracked or ignored, such as `CLAUDE.local.md`): today they are only
+  shown at plan time. Research §4.5 offers an opt-in that puts their text into the briefs, clearly labelled. Keep
+  "show only", or build the opt-in?
 
 ## What changed vs the original onboarding prompt
 
