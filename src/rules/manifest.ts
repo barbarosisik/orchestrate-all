@@ -447,7 +447,7 @@ async function readImported(ctx: RepoContext, tree: Tree, drafts: readonly Draft
       }
       hiddenFlag(draft.blob.path, text, draft.flags);
       draft.imports = resolveImports(tree, draft.blob.path, text, draft.flags);
-      if (depth < MAX_IMPORT_HOPS) hop.push(...draft.imports.filter((i) => i.exists).map((i) => ({ path: i.path as string, by: draft.blob.path })));
+      hop.push(...draft.imports.filter((i) => i.exists).map((i) => ({ path: i.path as string, by: draft.blob.path })));
     }
   }
   return { ok: true, imported: [...found.values()] };
