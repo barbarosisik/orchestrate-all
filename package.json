@@ -21,5 +21,8 @@
     "@vitest/coverage-v8": "^5.1.1",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1"
+  },
+  "optionalDependencies": {
+    "koffi": "3.3.7"
   }
 }
