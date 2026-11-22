@@ -50,15 +50,18 @@ describe('Claude @imports', () => {
   });
 
   it('handles crafted lines in linear time', () => {
-    // Each of these took minutes or hours with backtracking regular expressions.
-    const started = performance.now();
-    expect(importsOnly(`${'@a'.repeat(5000)} b`)).toBe(false);
-    expect(importsOnly(`${'@a '.repeat(5000)}`)).toBe(true);
-    expect(claudeImports(`@a${'.'.repeat(200_000)}b`, 'CLAUDE.md')).toEqual([]);
-    expect(claudeImports(`x${'`'.repeat(200_000)} @real.md`, 'CLAUDE.md').map((i) => i.path)).toEqual(['real.md']);
-    expect(claudeImports(`${'`a'.repeat(100_000)} @b.md`, 'CLAUDE.md').map((i) => i.path)).toEqual(['b.md']);
-    expect(importsOnly(`${'<!--'.repeat(100_000)}\n@a.md`)).toBe(false);
-    expect(performance.now() - started).toBeLessThan(3000);
+    // Sized so that the backtracking regular expressions these scans replace take seconds (and fail), not hours.
+    const timed = (run: () => void): number => {
+      const started = performance.now();
+      run();
+      return performance.now() - started;
+    };
+    expect(timed(() => expect(importsOnly(`${'@a'.repeat(28)} b`)).toBe(false))).toBeLessThan(1500);
+    expect(timed(() => expect(importsOnly(`${'@a '.repeat(5000)}`)).toBe(true))).toBeLessThan(1500);
+    expect(timed(() => expect(claudeImports(`@a${'.'.repeat(60_000)}b`, 'CLAUDE.md')).toEqual([]))).toBeLessThan(1500);
+    expect(timed(() => expect(claudeImports(`x${'`'.repeat(100_000)} @real.md`, 'CLAUDE.md').map((i) => i.path)).toEqual(['real.md']))).toBeLessThan(1500);
+    expect(timed(() => expect(claudeImports(`${'`a'.repeat(50_000)} @b.md`, 'CLAUDE.md').map((i) => i.path)).toEqual(['b.md']))).toBeLessThan(1500);
+    expect(timed(() => expect(importsOnly(`${'<!--'.repeat(50_000)}\n@a.md`)).toBe(false))).toBeLessThan(1500);
   });
 
   it('follows the code span rules: runs of the same length pair up, an unpaired run is plain text', () => {

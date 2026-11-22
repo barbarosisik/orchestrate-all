@@ -77,7 +77,7 @@ function plumbingCommit(repo: TmpRepo, files: Record<string, Item>): string {
     const lines = [...folder.entries].map(([name, child]) =>
       'entries' in child ? `040000 tree ${write(child)}\t${name}` : `${child.mode} blob ${child.id}\t${name}`,
     );
-    return repo.gitInput(`${lines.join('\n')}\n`, 'mktree');
+    return repo.gitInput(`${lines.join('\u0000')}\u0000`, 'mktree', '-z');
   };
   return repo.git('commit-tree', write(root), '-m', 'plumbing');
 }
@@ -257,6 +257,14 @@ describe('rules manifest: files in the base commit', () => {
     for (const line of text.split('\n')) expect(line.length, line.slice(0, 80)).toBeLessThan(1500);
     expect(text).toContain('[U+202E]');
     expect(text).not.toContain('\u202E');
+  });
+
+  it('does not resolve a link whose target holds control or hidden characters, even to a file of that name', async () => {
+    const f = setup({ 'README.md': 'hi\n' });
+    const base = plumbingCommit(f.repo, { 'a\nb.md': 'x\n', 'CLAUDE.md': { link: 'a\nb.md' }, 'c\u202Ed.md': 'y\n', 'GEMINI.md': { link: 'c\u202Ed.md' } });
+    const m = await manifestOf(f, { baseSha: base, linksAsText: true });
+    expect(entry(m, 'CLAUDE.md').link?.resolved).toBeNull();
+    expect(entry(m, 'GEMINI.md').link?.resolved).toBeNull();
   });
 
   it('treats names with hidden characters as odd', async () => {
