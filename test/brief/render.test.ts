@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderBrief, type BriefInput, type UpstreamResult } from '../../src/brief/render.js';
 import { parseWorkerResult, type WorkerResult } from '../../src/brief/result.js';
 import { DEFAULT_RESERVED_PATTERNS } from '../../src/config/defaults.js';
+import { DEFAULT_MAX_BRIEF_BYTES } from '../../src/store/run.js';
 import type { EngineName, Task } from '../../src/plan/schema.js';
 import type { TaskRules } from '../../src/rules/applicable.js';
 
@@ -94,7 +95,10 @@ describe('worker brief', () => {
     expect(block(readonly, 'files')).toContain('This task changes no files.');
     const reserved = renderBrief(input({ tasks: [task('deps', { kind: 'reserved', owns: ['package.json', 'package-lock.json'] })], taskId: 'deps' }));
     expect(block(reserved, 'files')).toContain('- `package.json`');
-    expect(block(reserved, 'files')).toContain('the reserved files you own above are yours to change');
+    expect(block(reserved, 'files')).toContain('The ones you own above are yours to change; any other reserved file is not');
+    expect(block(reserved, 'stop_and_report')).toContain("a file that is not yours (a reserved file you don't own included)");
+    expect(block(reserved, 'stop_and_report')).not.toContain('or to a reserved file');
+    expect(block(renderBrief(input()), 'stop_and_report')).toContain('or to a reserved file');
     expect(block(reserved, 'constraints')).not.toContain("Don't add dependencies");
     expect(block(renderBrief(input()), 'constraints')).toContain("Don't add dependencies");
   });
@@ -112,7 +116,7 @@ describe('worker brief', () => {
     const text = block(renderBrief(input({ rules })), 'project_rules');
     expect(text).toContain('- `src/api/AGENTS.md`, for files under `src/api/`: your engine does not load it by itself.');
     expect(text).toContain('- `AGENTS.md`, for the whole repository: it is longer than your engine loads; read all of it.');
-    expect(text).toContain('`CLAUDE.md` leads to it');
+    expect(text).toContain('`CLAUDE.md` is a link to it, or names it');
     expect(text).toContain('imported by `CLAUDE.md`');
     expect(text).toContain('The rule file closest to the file you edit wins');
     expect(block(renderBrief(input({ rules: { any: true, pointers: [] } })), 'project_rules')).toContain('Your engine loads them by itself');
@@ -132,7 +136,14 @@ describe('worker brief', () => {
     expect(block(claudeShell, 'about_this_run')).not.toContain('no shell');
     expect(block(claudeShell, 'acceptance')).toContain('Run them yourself before you finish');
 
+    const readonlyCodex = renderBrief(input({ tasks: [task('look', { mode: 'readonly', owns: [] })], taskId: 'look' }));
+    expect(block(readonlyCodex, 'about_this_run')).toContain('Every run ends with a concrete report of what you found or an explicit blocker');
+    expect(block(readonlyCodex, 'about_this_run')).not.toContain('concrete change');
+
     const agy = renderBrief(input({ engine: 'antigravity' }));
+    expect(block(agy, 'about_this_run')).toContain('Commands you run may be refused in this run');
+    expect(block(agy, 'acceptance')).toContain('Run them yourself before you finish if your commands are allowed here');
+    expect(block(agy, 'constraints')).toContain("Don't retry a command that was refused.");
     expect(blocks(agy)).toEqual(['orchestra_brief', 'about_this_run', 'constraints', 'result_format', 'context', 'project_rules', 'files', 'acceptance', 'stop_and_report', 'task']);
     expect(block(agy, 'constraints')).toContain('retry it at most 2 times');
     expect(agy.trimEnd().split('\n').filter((line) => line !== '').slice(-2)[0]).toBe('Based on the information above, do task "api" (Task api) and end with the JSON result described in result_format.');
@@ -196,6 +207,39 @@ describe('worker brief', () => {
     expect(data).toContain('[…]');
     const none = block(renderBrief(input({ taskId: 'web', upstream: [{ taskId: 'api', commit: 'd'.repeat(40), files: [], result: null }] })), 'upstream_results');
     expect(none).toContain('Its worker left no readable result.');
+  });
+
+  it('keeps every part within its budget, so even a brief built from the largest inputs fits the run folder', () => {
+    const hidden = (n: number): string => '\u200B'.repeat(n);
+    const longPath = (i: number): string => `${'p'.repeat(990)}/${i}`;
+    const big = (id: string, extra: Partial<Task> = {}): Task =>
+      task(id, {
+        title: hidden(80),
+        brief: hidden(100_000),
+        owns: Array.from({ length: 200 }, (_, i) => longPath(i)),
+        acceptance: { commands: Array.from({ length: 20 }, () => Array.from({ length: 20 }, () => hidden(10_000))), criteria: Array.from({ length: 50 }, () => hidden(50_000)) },
+        ...extra,
+      });
+    const deps = Array.from({ length: 7 }, (_, i) => `d${i}`);
+    const tasks = [big('api', { dependsOn: deps }), ...deps.map((id) => big(id)), ...Array.from({ length: 90 }, (_, i) => big(`o${i}`))];
+    const result: WorkerResult = {
+      ...RESULT,
+      summary: hidden(4_000),
+      interfaces: Array.from({ length: 100 }, () => ({ name: hidden(200), kind: hidden(50), location: hidden(1_000), signature: hidden(2_000), change: 'added' as const, notes: hidden(1_000) })),
+      decisions: Array.from({ length: 50 }, () => ({ decision: hidden(1_000), reason: hidden(1_000) })),
+    };
+    const upstream = deps.map((id) => ({ taskId: id, commit: 'd'.repeat(40), files: Array.from({ length: 1_000 }, (_, i) => longPath(i)), result }));
+    const rules: TaskRules = { any: true, pointers: Array.from({ length: 5_000 }, (_, i) => ({ path: longPath(i), folder: 'p'.repeat(990), reason: 'import' as const, via: longPath(i + 1) })) };
+    const revision = { instructions: hidden(20_000), findings: Array.from({ length: 100 }, () => ({ severity: 'major' as const, summary: hidden(500), path: hidden(1_000), detail: hidden(10_000) })) };
+    const brief = renderBrief({ plan: { goal: hidden(10_000), tasks }, taskId: 'api', startSha: START, round: 1, rules, reservedPatterns: DEFAULT_RESERVED_PATTERNS, shell: false, upstream, revision });
+    expect(Buffer.byteLength(brief)).toBeLessThan(2 * 1024 * 1024);
+    expect(Buffer.byteLength(brief)).toBeLessThan(DEFAULT_MAX_BRIEF_BYTES);
+    for (const name of ['upstream_results', 'files', 'acceptance', 'project_rules', 'revision', 'task']) {
+      expect(brief.match(new RegExp(`^</${name}>$`, 'gm')), name).toHaveLength(1);
+    }
+    const data = block(brief, 'upstream_results');
+    expect(data.match(/^<upstream /gm)?.length).toBe(data.match(/^<\/upstream>$/gm)?.length);
+    expect(data).toContain('left out to keep the brief short');
   });
 
   it('only takes upstream results from tasks this one depends on', () => {

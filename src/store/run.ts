@@ -90,8 +90,8 @@ const MIB = 1024 * 1024;
 export const MAX_FILE_BYTES = { plan: 32 * MIB, state: 16 * MIB, finalize: 64 * MIB, gate: 32 * MIB } as const;
 export type FileLimits = { readonly [K in keyof typeof MAX_FILE_BYTES]: number };
 export const DEFAULT_MAX_DIFF_BYTES = 4 * MIB;
-/** Briefs are rendered with every part capped (brief/render.ts); this is far above what one comes to. */
-export const DEFAULT_MAX_BRIEF_BYTES = MIB;
+/** Briefs are rendered with every part bounded (brief/render.ts), so one stays under 2 MiB; this leaves room. */
+export const DEFAULT_MAX_BRIEF_BYTES = 4 * MIB;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const DIFF_MARKER = /\n\[\.\.\. diff cut at \d+ bytes by Orchestra \.\.\.\]\n$/;
 
