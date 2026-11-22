@@ -5,16 +5,16 @@
  *
  * - No shell: each command is an argument array from the approved plan, resolved by resolve.ts.
  * - The environment is an allowlist (env.ts): secrets don't reach the commands.
- * - Each command has a time limit. On timeout its whole process tree is stopped: on Linux and macOS the
- *   command runs in its own process group, which is killed; on Windows `taskkill /t` stops the tree. On
- *   Linux and macOS, processes a command leaves running when it exits are stopped too.
+ * - Each command has a time limit. On timeout its whole process tree is stopped (os/process-tree.ts): on Linux
+ *   and macOS the command runs in its own process group, which is killed; on Windows it runs in a Job Object of
+ *   its own, without which it is not run. Processes a command leaves running when it exits are stopped too.
  * - Output is kept up to a limit per stream: the start and, mostly, the end (where test runners summarize).
  */
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import { DEFAULT_LIMITS } from '../config/defaults.js';
-import { OWN_PROCESS_GROUP, stopTree, timerDelay } from '../os/process-tree.js';
+import { OWN_PROCESS_GROUP, prepareTree, timerDelay } from '../os/process-tree.js';
 import { commandEnv, type CommandEnvOptions } from './env.js';
 import { resolveCommand, type Launch } from './resolve.js';
 
@@ -149,6 +149,13 @@ export function launchCommand(
     let exit: { code: number | null; signal: string | null } | null = null;
     let finished = false;
 
+    // Its whole tree, ready before the start (a Job Object on Windows, without which it is not started).
+    const prepared = prepareTree({ env });
+    if (!prepared.ok) {
+      resolve(notStarted(argv, launch.program, prepared.error));
+      return;
+    }
+    const { tree } = prepared;
     let child: ChildProcessByStdio<null, Readable, Readable>;
     try {
       child = spawn(launch.program, [...launch.args], {
@@ -163,15 +170,25 @@ export function launchCommand(
       });
     } catch (error) {
       // Some failures (a file that isn't a program: ENOEXEC) are thrown right away instead of reported.
+      tree.end();
       resolve(notStarted(argv, launch.program, error instanceof Error ? error.message : String(error)));
       return;
     }
+
+    // Taken in right away. Not taken in: it goes now (it had no time to start anything), reported as not started.
+    const containError = child.pid === undefined ? null : tree.attach(child.pid);
+    if (containError !== null) child.kill('SIGKILL');
 
     const finish = (error: string | null): void => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       clearTimeout(grace);
+      tree.end();
+      if (containError !== null) {
+        resolve(notStarted(argv, launch.program, `Stopped as it started. ${containError}`));
+        return;
+      }
       const code = exit?.code ?? null;
       const status: CommandStatus = timedOut ? 'timed-out' : code === 0 ? 'passed' : 'failed';
       resolve({
@@ -190,7 +207,7 @@ export function launchCommand(
     let grace: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (child.pid !== undefined) void stopTree(child.pid, env);
+      tree.stop();
     }, limit);
 
     child.stdout.on('data', (chunk: Buffer) => stdout.add(chunk));
@@ -199,13 +216,14 @@ export function launchCommand(
       clearTimeout(timer);
       if (exit === null && !finished) {
         finished = true;
-        resolve(notStarted(argv, launch.program, error.message));
+        tree.end();
+        resolve(notStarted(argv, launch.program, containError === null ? error.message : `Stopped as it started. ${containError}`));
       }
     });
     child.on('exit', (code, signal) => {
       exit = { code, signal };
-      // Anything the command left running is stopped (on Linux and macOS: its process group).
-      if (child.pid !== undefined && OWN_PROCESS_GROUP) void stopTree(child.pid, env);
+      // Anything the command left running is stopped (its process group, or its Job Object).
+      tree.end();
       grace = setTimeout(() => {
         child.stdout.destroy();
         child.stderr.destroy();

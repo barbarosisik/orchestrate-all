@@ -24,11 +24,11 @@ function node(code: string): string[] {
   return [NODE, '-e', code];
 }
 
-/** Code that starts a child node process which writes `file` after `ms`, without waiting for it. */
-function leaveChildWriting(file: string, ms: number): string {
+/** Code that starts a child node process which writes `file` after `ms`, without waiting for it (detached: on its own). */
+function leaveChildWriting(file: string, ms: number, detached = false): string {
   const child = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(file)}, 'x'), ${ms})`;
   // unref(): the command itself doesn't wait for the child.
-  return `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { stdio: 'ignore' }).unref();`;
+  return `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { stdio: 'ignore', detached: ${detached} }).unref();`;
 }
 
 describe('OutputCapture', () => {
@@ -115,10 +115,29 @@ describe('runCommand', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it.skipIf(WINDOWS)('stops processes a command leaves running when it exits', async () => {
+  it('stops processes a command leaves running when it exits', async () => {
+    // On Windows, Node itself also stops a child started without `detached` when its parent exits; the detached test
+    // below is the one only the Job Object passes.
     const dir = tempDir();
     const marker = join(dir, 'leftover-ran.txt');
     const result = await runCommand(dir, node(leaveChildWriting(marker, 1500)));
+    expect(result.status).toBe('passed');
+    await delay(2500);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('stops a leftover holding the output as soon as the command exits, so the output closes', async () => {
+    const dir = tempDir();
+    const child = `setTimeout(() => {}, 8000)`;
+    const code = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { stdio: ['ignore', 'inherit', 'ignore'] }).unref();`;
+    const result = await runCommand(dir, node(code));
+    expect(result).toMatchObject({ status: 'passed', error: null });
+  });
+
+  it.runIf(WINDOWS)('on Windows, also stops a process a command started detached', async () => {
+    const dir = tempDir();
+    const marker = join(dir, 'detached-ran.txt');
+    const result = await runCommand(dir, node(leaveChildWriting(marker, 1500, true)));
     expect(result.status).toBe('passed');
     await delay(2500);
     expect(existsSync(marker)).toBe(false);

@@ -24,8 +24,11 @@ export interface FakeReply {
   readonly hang?: boolean;
   /** Ends by sending itself this signal (Linux and macOS). */
   readonly killSelf?: string;
-  /** Starts a child (in the same process group) that writes `marker` after `afterMs`, and doesn't wait for it. */
-  readonly leaveChild?: { readonly marker: string; readonly afterMs: number };
+  /**
+   * Starts a child that writes `marker` after `afterMs`, and doesn't wait for it: in the same process group, or with
+   * `detached`, on its own (its own session on Linux and macOS), keeping the engine's stdout open with `holdsOutput`.
+   */
+  readonly leaveChild?: { readonly marker: string; readonly afterMs: number; readonly detached?: boolean; readonly holdsOutput?: boolean };
 }
 
 export interface FakeScenario {
@@ -73,7 +76,9 @@ function go() {
   const settings = at >= 0 ? argv[at + 1] : null;
   fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ argv, stdin: Buffer.concat(chunks).toString('utf8'), cwd: process.cwd(), env: process.env, settings }) + '\\n');
   if (reply.leaveChild) {
-    cp.spawn(process.execPath, ['-e', 'setTimeout(() => require("fs").writeFileSync(' + JSON.stringify(reply.leaveChild.marker) + ', "x"), ' + reply.leaveChild.afterMs + ')'], { stdio: 'ignore' }).unref();
+    const leave = reply.leaveChild;
+    cp.spawn(process.execPath, ['-e', 'setTimeout(() => require("fs").writeFileSync(' + JSON.stringify(leave.marker) + ', "x"), ' + leave.afterMs + ')'],
+      { stdio: ['ignore', leave.holdsOutput ? 'inherit' : 'ignore', 'ignore'], detached: !!leave.detached }).unref();
   }
   setTimeout(() => {
     if (reply.fillerBytes) process.stdout.write('x'.repeat(reply.fillerBytes) + '\\n');

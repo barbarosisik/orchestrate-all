@@ -276,13 +276,38 @@ describe('runWorker limits', () => {
     expect(outcome.error).toBe('Claude Code was stopped because the run was cancelled.');
   });
 
-  it.skipIf(WINDOWS)('stops processes a worker leaves running when it exits', async () => {
+  it('stops processes a worker leaves running when it exits', async () => {
+    // On Windows, Node itself also stops a child started without `detached` when its parent exits; the detached test
+    // below is the one only the Job Object passes.
     const s = await setup();
     const marker = join(tempDir(), 'leftover-ran.txt');
     installFakeEngine(s.bin, 'claude', { run: { stdout: CLAUDE_OK, leaveChild: { marker, afterMs: 1500 } } });
     const outcome = await runWorker(options(s, 'api'));
     expect(outcome.status).toBe('completed');
     await delay(2500);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('stops a leftover holding the output as soon as the worker exits, so the output closes', async () => {
+    const s = await setup();
+    const marker = join(tempDir(), 'holder-ran.txt');
+    installFakeEngine(s.bin, 'claude', { run: { stdout: CLAUDE_OK, leaveChild: { marker, afterMs: 8000, holdsOutput: true } } });
+    const outcome = await runWorker(options(s, 'api'));
+    expect(outcome.status).toBe('completed');
+    expect(outcome.mayStillBeRunning).toBe(false);
+    expect(outcome.notes).toEqual([]);
+  });
+
+  it.runIf(WINDOWS)('on Windows, also stops a process started detached that holds the output, so nothing is left running', async () => {
+    const s = await setup();
+    const marker = join(tempDir(), 'detached-ran.txt');
+    installFakeEngine(s.bin, 'claude', { run: { stdout: CLAUDE_OK, leaveChild: { marker, afterMs: 3000, detached: true, holdsOutput: true } } });
+    const outcome = await runWorker(options(s, 'api'));
+    expect(outcome.status).toBe('completed');
+    // The job stopped it as the engine exited, so the output closed (no note about it staying open).
+    expect(outcome.mayStillBeRunning).toBe(false);
+    expect(outcome.notes).toEqual([]);
+    await delay(3500);
     expect(existsSync(marker)).toBe(false);
   });
 });

@@ -13,9 +13,9 @@
  *    JSON events by the engine's adapter (a line too long to read is skipped and counted).
  * 4. The store records the worker run before the start (endedAt null, so a crash shows it never finished) and
  *    again at the end, with exit code, error and tokens; the log gets "started" and "finished".
- * 5. At the time limit, or when `signal` aborts, the whole process tree is stopped (os/process-tree.ts). On
- *    Linux and macOS, processes the engine leaves running when it exits are stopped too; on Windows that
- *    needs a Job Object (not built yet, docs/HANDOFF.md). Once the engine has exited, a later time limit or
+ * 5. At the time limit, or when `signal` aborts, the whole process tree is stopped (os/process-tree.ts: its
+ *    process group on Linux and macOS, a Job Object on Windows, without which it is not run). Processes the
+ *    engine leaves running when it exits are stopped too. Once the engine has exited, a later time limit or
  *    cancel changes nothing. `mayStillBeRunning` says when something it started may still be writing.
  *
  * A run counts as "completed" only when the engine exited with 0, said it finished, and broke none of the
@@ -30,7 +30,7 @@ import { join } from 'node:path';
 import type { Launch } from '../accept/resolve.js';
 import { DEFAULT_LIMITS } from '../config/defaults.js';
 import { homeLayout } from '../config/home.js';
-import { OWN_PROCESS_GROUP, stopTree, timerDelay } from '../os/process-tree.js';
+import { OWN_PROCESS_GROUP, prepareTree, timerDelay } from '../os/process-tree.js';
 import type { EngineName } from '../plan/schema.js';
 import { canonicalPath, samePath } from '../repo/canonical.js';
 import { clipText, workerEntry } from '../store/entries.js';
@@ -114,6 +114,8 @@ interface ProcessEnd {
   readonly spawnError: string | null;
   /** Whether a process was started at all. */
   readonly spawned: boolean;
+  /** Why it was stopped as soon as it started (it could not be contained), or null. */
+  readonly containError: string | null;
   readonly timedOut: boolean;
   readonly cancelled: boolean;
   readonly note: string | null;
@@ -145,7 +147,7 @@ function timeText(ms: number): string {
   return seconds < 120 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 }
 
-const NOT_SPAWNED = { exitCode: null, signal: null, spawned: false, timedOut: false, cancelled: false, note: null, mayStillBeRunning: false };
+const NOT_SPAWNED = { exitCode: null, signal: null, spawned: false, containError: null, timedOut: false, cancelled: false, note: null, mayStillBeRunning: false };
 
 /** Starts the program and waits for it to end, to be stopped, or to fail to start. Never throws. */
 function runProcess(
@@ -164,6 +166,13 @@ function runProcess(
       resolve({ ...NOT_SPAWNED, spawnError: null, cancelled: true });
       return;
     }
+    // Its whole tree, ready before the start (a Job Object on Windows, without which it is not started).
+    const prepared = prepareTree({ env });
+    if (!prepared.ok) {
+      resolve({ ...NOT_SPAWNED, spawnError: prepared.error });
+      return;
+    }
+    const { tree } = prepared;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(launch.program, [...launch.args], {
@@ -177,6 +186,7 @@ function runProcess(
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
+      tree.end();
       resolve({ ...NOT_SPAWNED, spawnError: error instanceof Error ? error.message : String(error) });
       return;
     }
@@ -184,6 +194,8 @@ function runProcess(
     let timedOut = false;
     let cancelled = false;
     let spawnError: string | null = null;
+    // Taken in right away (no process id: it didn't start, and 'error' says why).
+    const containError = child.pid === undefined ? null : tree.attach(child.pid);
     let exit: { code: number | null; signal: string | null } | null = null;
     let finished = false;
     let grace: NodeJS.Timeout | undefined;
@@ -198,10 +210,21 @@ function runProcess(
       signal?.removeEventListener('abort', onAbort);
       child.stdout.destroy();
       child.stderr.destroy();
-      resolve({ exitCode: exit?.code ?? null, signal: exit?.signal ?? null, spawnError, spawned: spawnError === null, timedOut, cancelled, note, mayStillBeRunning });
+      tree.end();
+      resolve({
+        exitCode: exit?.code ?? null,
+        signal: exit?.signal ?? null,
+        spawnError,
+        spawned: spawnError === null,
+        containError,
+        timedOut,
+        cancelled,
+        note,
+        mayStillBeRunning,
+      });
     };
     const stop = (): void => {
-      if (child.pid !== undefined) void stopTree(child.pid, env);
+      tree.stop();
       stopDeadline ??= setTimeout(() => finish('It could not be stopped and may still be running.', true), STOP_GRACE_MS);
     };
     const timer = setTimeout(() => {
@@ -216,7 +239,12 @@ function runProcess(
 
     // The engine may exit without reading all of stdin (EPIPE); that is not a problem of ours.
     child.stdin.on('error', () => {});
-    child.stdin.end(stdin);
+    if (containError === null) child.stdin.end(stdin);
+    else {
+      // Not taken in: it never gets the brief, and it goes now (it had no time to start anything).
+      child.stdin.end();
+      child.kill('SIGKILL');
+    }
     child.stdout.on('data', onStdout);
     child.stderr.on('data', onStderr);
     child.on('error', (error) => {
@@ -230,8 +258,8 @@ function runProcess(
       // It ended on its own (or was stopped): a time limit or a cancel coming later changes nothing.
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
-      // Anything it left running is stopped (on Linux and macOS: its process group).
-      if (child.pid !== undefined && OWN_PROCESS_GROUP) void stopTree(child.pid, env);
+      // Anything it left running is stopped (its process group, or its Job Object).
+      tree.end();
       grace = setTimeout(() => finish('Its output stayed open after it exited (a process it started may still be running).', true), CLOSE_GRACE_MS);
     });
     child.on('close', () => {
@@ -244,6 +272,8 @@ function runProcess(
 function verdict(adapter: EngineAdapter, end: ProcessEnd, report: EngineReport, timeoutMs: number): { status: WorkerStatus; error: string | null } {
   const name = adapter.label;
   if (end.cancelled && !end.spawned) return { status: 'cancelled', error: `The run was cancelled before ${name} started.` };
+  // It never got the brief, whatever happened next.
+  if (end.containError !== null) return { status: 'not-started', error: `${name} was stopped as it started. ${end.containError}` };
   if (end.cancelled) return { status: 'cancelled', error: `${name} was stopped because the run was cancelled.` };
   if (end.timedOut) return { status: 'timed-out', error: `${name} was stopped after its time limit (${timeText(timeoutMs)}).` };
   if (end.spawnError !== null) return { status: 'not-started', error: `${name} could not be started: ${end.spawnError}` };
