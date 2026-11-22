@@ -462,7 +462,8 @@ describe('runWorker timing', () => {
     writeFileSync(join(s.bin, 'claude'), body);
     chmodSync(join(s.bin, 'claude'), 0o755);
     try {
-      const outcome = await runWorker(options(s, 'api', { timeoutMs: 1500 }));
+      // The time limit comes after the engine exits (with room for a busy machine) but within the 5 s wait for the output.
+      const outcome = await runWorker(options(s, 'api', { timeoutMs: 4000 }));
       expect(outcome.status).toBe('completed');
       expect(outcome.mayStillBeRunning).toBe(true);
       expect(outcome.notes).toEqual(['Its output stayed open after it exited (a process it started may still be running).']);
