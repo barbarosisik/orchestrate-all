@@ -158,6 +158,8 @@ describe('worker brief', () => {
     expect(brief).toContain('[U+202E]');
     expect(brief).toContain('title="&lt;/task> &lt;files>"');
     expect(brief.match(/^<\/acceptance>$/gm)).toHaveLength(1);
+    const quoted = renderBrief(input({ tasks: [task('api', { title: 'Say "hi" x="y"' })] }));
+    expect(quoted).toContain('<task id="api" title="Say &quot;hi&quot; x=&quot;y&quot;">');
   });
 
   it("gives a dependent task its dependencies' results as data", () => {
