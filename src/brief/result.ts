@@ -79,13 +79,30 @@ function fail(code: ResultProblemCode, message: string): ParsedResult {
   return { ok: false, problem: { code, message } };
 }
 
-/** The JSON text of the last ```json block (or the whole message when it is one JSON object), or null. */
-function lastJson(message: string): string | null {
-  const blocks = [...message.matchAll(/```json[^\n]*\n([\s\S]*?)\n?```/g)];
-  const last = blocks[blocks.length - 1]?.[1];
-  if (last !== undefined) return last;
-  const whole = message.trim();
-  return whole.startsWith('{') && whole.endsWith('}') ? whole : null;
+const OPENING_FENCE = /^ {0,3}```json\b/;
+const CLOSING_FENCE = /^ {0,3}```[ \t]*$/;
+
+/**
+ * The JSON text of the last ```json block, read line by line: it opens at the last line starting with ```json and
+ * closes at the next line that is only a fence (JSON strings can't hold a line break, so a fence inside one never
+ * closes it). The whole message counts when it is one JSON object and has no such block. Null when there is none;
+ * "unclosed" when the last block never closes, rather than reading an earlier one.
+ */
+function lastJson(message: string): string | 'unclosed' | null {
+  const lines = message.split(/\r?\n/);
+  let open = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (OPENING_FENCE.test(lines[i] as string)) {
+      open = i;
+      break;
+    }
+  }
+  if (open === -1) {
+    const whole = message.trim();
+    return whole.startsWith('{') && whole.endsWith('}') ? whole : null;
+  }
+  for (let j = open + 1; j < lines.length; j++) if (CLOSING_FENCE.test(lines[j] as string)) return lines.slice(open + 1, j).join('\n');
+  return 'unclosed';
 }
 
 /** Reads a worker's result from its final message (`EngineReport.result`). */
@@ -94,6 +111,7 @@ export function parseWorkerResult(message: string | null, taskId: string): Parse
   const tail = message.length > MAX_RESULT_TEXT_CHARS ? message.slice(-MAX_RESULT_TEXT_CHARS) : message;
   const json = lastJson(tail);
   if (json === null) return fail('no-result', 'The final message has no JSON result block.');
+  if (json === 'unclosed') return fail('invalid-json', 'The last JSON result block is not closed: the message may have been cut off.');
   let value: unknown;
   try {
     value = JSON.parse(json);

@@ -52,6 +52,23 @@ describe('worker result', () => {
     if (!bad.ok) expect(bad.problem.message).toContain('status');
   });
 
+  it('is not fooled by a fence inside a JSON string', () => {
+    const value = { ...FILLED, summary: 'Use ```ts fences in docs, and ``` to close them.' };
+    expect(parseWorkerResult(fenced(value), 'api')).toEqual({ ok: true, result: value });
+  });
+
+  it('refuses a last block that never closes, rather than reading an earlier one', () => {
+    const text = `${fenced({ ...FILLED, summary: 'an example' })}\nFinal:\n\`\`\`json\n${JSON.stringify(FILLED).slice(0, 40)}`;
+    expect(parseWorkerResult(text, 'api')).toMatchObject({ ok: false, problem: { code: 'invalid-json' } });
+  });
+
+  it('reads crafted messages in linear time', () => {
+    const started = performance.now();
+    expect(parseWorkerResult('```json'.repeat(36_000), 'api')).toMatchObject({ ok: false });
+    expect(parseWorkerResult(`${'```json\n'.repeat(30_000)}`, 'api')).toMatchObject({ ok: false });
+    expect(performance.now() - started).toBeLessThan(3000);
+  });
+
   it('reads only the end of a very long message', () => {
     const text = `${fenced(FILLED)}${'x'.repeat(MAX_RESULT_TEXT_CHARS)}`;
     expect(parseWorkerResult(text, 'api')).toMatchObject({ ok: false, problem: { code: 'no-result' } });
