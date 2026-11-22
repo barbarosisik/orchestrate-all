@@ -73,7 +73,8 @@ export interface AgentConfigOptions {
   readonly maxEntries?: number;
 }
 
-function envFolder(env: NodeJS.ProcessEnv, name: string): string | null {
+/** An absolute folder named by an environment variable (any letter case of its name), or null. */
+export function envFolder(env: NodeJS.ProcessEnv, name: string): string | null {
   const key = Object.keys(env).find((k) => k.toUpperCase() === name);
   const value = key === undefined ? undefined : env[key];
   return value !== undefined && value.length > 0 && isAbsolute(value) ? value : null;

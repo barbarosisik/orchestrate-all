@@ -18,6 +18,8 @@ const GIT_ENV = {
 export interface TmpRepo {
   readonly dir: string;
   git(...args: string[]): string;
+  /** Runs git with `input` on stdin (hash-object --stdin, mktree). */
+  gitInput(input: string, ...args: string[]): string;
   write(relPath: string, content?: string): void;
   commitAll(message?: string): string;
   cleanup(): void;
@@ -32,6 +34,8 @@ export function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n
   const dir = mkdtempSync(join(tmpdir(), 'orch-repo-'));
   const git = (...args: string[]): string =>
     execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: dir, env: GIT_ENV, encoding: 'utf8' }).trim();
+  const gitInput = (input: string, ...args: string[]): string =>
+    execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: dir, env: GIT_ENV, encoding: 'utf8', input }).trim();
   const write = (relPath: string, content = 'x\n'): void => {
     const full = join(dir, relPath);
     mkdirSync(dirname(full), { recursive: true });
@@ -52,5 +56,5 @@ export function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n
     throw error;
   }
 
-  return { dir, git, write, commitAll, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, git, gitInput, write, commitAll, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
