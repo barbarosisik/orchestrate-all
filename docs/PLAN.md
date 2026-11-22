@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) next (2026-11-21). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) in progress: the Windows Job Object is done (2026-11-22). This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -51,6 +51,7 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Codex workers | `codex exec` in its `workspace-write` sandbox (writes only in the worktree and temp folders, `.git` read-only, no network), without your `config.toml` (`--ignore-user-config`), execpolicy rules, hooks, apps or plugins |
 | Antigravity workers | `agy` in `accept-edits` mode with `--sandbox`, on your Gemini API key only: detection refuses `agy` on a Google sign-in. Least verified lane (from docs, not runs) |
 | Worker environment | The acceptance allowlist plus where each CLI keeps its sign-in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the Linux session bus). Billing variables (Anthropic, Codex/OpenAI and Google keys, base URLs, Bedrock/Vertex switches) are never passed, even when allowed in the config; Antigravity workers get `GEMINI_API_KEY` on purpose. The brief goes on stdin. |
+| Stopping processes | Everything Orchestra starts (workers, acceptance commands, detection probes) is stopped with all it started: at a time limit, on cancel, and whatever it leaves running when it exits. Linux and macOS: its own process group (a process that starts a session of its own gets out). Windows: a Job Object of its own (through the `koffi` library, your choice), which also stops processes whose parent exited, and everything when Orchestra stops or crashes; a process that can't be put in one is stopped at once and never gets its input. It cleans up; against a worker trying to get out only a sandbox helps. |
 | Engine detection | At the start of every run: installed, version read, and signed in through each CLI's own status command (Claude `authMethod: "claude.ai"`, Codex "Logged in using ChatGPT", `agy` in API-key mode). Credential files are never opened. |
 | Claude CLI | Workers need ≥ 2.1.101 (before it, `--setting-sources project` could delete conversation history older than 30 days); detection refuses older versions. ≥ 2.1.325 recommended (a warning below it). The floor is a config value. |
 | Agent config folders | Compared before and after each worker: settings, rule files, hooks, sub-agents, commands, skills, plugin lists, MCP and hook configs, Claude's automatic memory and scripts at the top of `~/.claude`, `~/.codex`, `~/.agents`, `~/.gemini`; links are followed. Sign-in files are never opened. Any change is reported. |
@@ -83,7 +84,7 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 8 | Finalize checks | ☁ | done |
 | 9 | Run store (run folder layout) | ☁ | done |
 | 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines; worker runs into the run folder; agent config folders compared | ☁ | done (part 1) |
-| 10b | Containment: an OS sandbox around each whole worker (only its worktree writable), a Windows Job Object for leftover processes; the engine flags checked on your machine | 🖥 | |
+| 10b | Containment: an OS sandbox around each whole worker (only its worktree writable), a Windows Job Object for leftover processes; the engine flags checked on your machine | 🖥 | Job Object done |
 | 11 | Rules manifest + brief builder | ☁ | |
 | 12 | Daemon (lazy start, token, crash recovery) | ☁ | |
 | 13 | Approval dialog | 🖥 | |

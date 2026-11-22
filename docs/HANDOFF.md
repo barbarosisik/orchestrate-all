@@ -1,6 +1,6 @@
 # Handoff
 
-**Last updated:** 2026-11-21. Read this first, then [PLAN.md](PLAN.md). If you have the original onboarding prompt,
+**Last updated:** 2026-11-22. Read this first, then [PLAN.md](PLAN.md). If you have the original onboarding prompt,
 treat it as background only: where it disagrees with this file or PLAN.md, these files win (see "What changed" below).
 
 ## What Orchestra is (as decided with the owner)
@@ -18,6 +18,9 @@ treat it as background only: where it disagrees with this file or PLAN.md, these
   - Google's consumer terms don't allow wrapping `agy` on a subscription login.
   - Neon is `gemini-4-neon`.
 - **No coding rules of its own.** Each project's own `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` carry the rules.
+- **Windows containment (decided 2026-11-22):** the Job Object uses the `koffi` FFI library (an optional dependency,
+  pinned). Microsoft's MXC SDK is not used (its telemetry can't be turned off), so Windows has no sandbox around a
+  whole worker for now: Codex and `agy` sandbox their own commands there, Claude Code doesn't.
 
 ## Done
 
@@ -37,7 +40,8 @@ treat it as background only: where it disagrees with this file or PLAN.md, these
 | Step 8: finalize checks (the integration branch's history against the recorded merges; a preview of the merge into the user's branch at its current tip; nothing of the user's overwritten; every merged task's acceptance commands re-run on exactly what the branch would hold, in a check worktree; a report) | `src/finalize/`, check worktrees in `src/worktree/manager.ts` |
 | Step 9: run store (the run folder `<home>/runs/<runId>`: approved plan and hash, the run's state, the last finalize report, a capped JSON Lines log of decisions, and per task and round the worker's output, the gate and the commit's diff; atomic writes, no links, everything read back checked against its schema and the plan; enough to carry on after a crash) | `src/store/` |
 | Step 10, part 1: engines (detection at the start of a run: installed, version, signed in or on the API key, through each CLI's own status command; one adapter per engine: command line, worker environment without billing variables, brief on stdin, event stream read into tokens, refusals, final result and violations; worker runs saved into the run folder, with a time limit and cancellation that stop the whole process tree; the agents' own config folders compared before and after each worker) | `src/engines/`, `src/os/process-tree.ts` |
-| Tests: 907 passing on macOS (2 more run only on Windows); CI runs Windows + Linux (Node 22 and 24); engines are tested against fake engines only | `test/`, `.github/workflows/ci.yml` |
+| Step 10, part 2, first piece: Job Objects (every process Orchestra starts on Windows, workers, acceptance commands and detection probes, runs in a Job Object of its own, so everything it starts is stopped at a time limit, on cancel, when it exits and when Orchestra stops or crashes, also processes whose parent already exited; the job is made before the start, so without one nothing starts, and a process that can't be put in it is stopped at once and never gets its input; Linux and macOS keep the process group, behind the same interface) | `src/os/job.ts`, `src/os/process-tree.ts` |
+| Tests: 923 passing on macOS (9 more run only on Windows); CI runs Windows + Linux (Node 22 and 24); engines are tested against fake engines only | `test/`, `.github/workflows/ci.yml` |
 
 **CI** runs on pull requests and on pushes to `main`. Steps 3–5 went into `dev` through PR #1, step 6 through PR #2,
 step 7 through PR #3, step 8 through PR #4, step 9 through PR #5 and step 10's first part through PR #6, all green on
@@ -60,7 +64,11 @@ timer; edits behind linked dotfiles and skill folders unseen; Claude's automatic
 scripts settings run left unwatched; same-size edits to files named like sign-ins; MCP calls in Codex runs; Claude's
 subscription token refused; pre-release order). All are fixed and each has a test; so are five of its smaller
 points (the worktree checked again just before the start, the `Monitor` tool, briefs starting with "/", one program
-path per engine, and `mayStillBeRunning`).
+path per engine, and `mayStillBeRunning`). An independent review of the Job Object found 4 problems (a Windows test
+whose leftover Node itself stops; the job made only after the start, with koffi loaded then, which left up to about
+100 ms for an acceptance command's code to start something outside it; the docs calling it containment; a `taskkill`
+fallback by process id, which could reach another process). All are fixed, and so are its smaller points (a pid file
+read as 0 in tests, koffi type names declared twice, a test that checked nothing).
 
 ### How steps 3–10 fit together (for the run manager later)
 
@@ -80,9 +88,9 @@ use those (`defaultValidationContext(detection.ready)`); show the user each engi
    Record it (`startSha`, status "working").
 2. `takeBaseline(ctx)` and `snapshotAgentConfig({ home: os.homedir(), env: process.env })` before the worker starts.
 3. `runWorker({ store, worktree: wt, round, brief, shell, signal })` (step 10, `src/engines/worker.ts`) runs the task's
-   engine and model from the plan, in this task's worktree only. It records the worker run in the task's `workers`
-   before the start (so a crash shows it never ended) and at the end (exit code, error, tokens), logs `worker`
-   started/finished, and saves the raw output with `store.openOutput`. `outcome.status` is "completed" only when the
+   engine and model from the plan, in this task's worktree only (on Windows inside a Job Object, or not at all). It
+   records the worker run in the task's `workers` before the start (so a crash shows it never ended) and at the end
+   (exit code, error, tokens), logs `worker` started/finished, and saves the raw output with `store.openOutput`. `outcome.status` is "completed" only when the
    engine exited with 0, said it finished, and broke none of the conditions it was started under (API billing,
    another permission mode, MCP servers, a shell that should be off). Steps 4–6 run in every case before anything
    is committed, but not while `outcome.mayStillBeRunning` (something the engine started may still write).
@@ -127,19 +135,22 @@ use those (`defaultValidationContext(detection.ready)`); show the user each engi
 `ctx` comes from `repoContext(readyPlan)`. All git goes through `src/git/run.ts` via `repoGit`/`worktreeGit`, which name
 the git folder explicitly and turn hooks off unless the user allows them.
 
-## Next: step 10, part 2: containment
+## Next: step 10, part 2: containment (the rest)
 
-Part 1 built detection, the adapters and worker runs (tested against fake engines). What is left needs the owner's
-machine and a decision (see open decisions):
+Part 1 built detection, the adapters and worker runs (tested against fake engines). Part 2's first piece, the Windows
+Job Object, is done (`src/os/job.ts`). What is left needs the owner's machine:
 
 - **An OS sandbox around each whole worker**, so it can write only its own worktree (plus the CLI's own state folder),
   not the run folder, the repository's object store or Orchestra's folders. Today: Codex sandboxes its own commands
   and edits (`workspace-write`); `agy --sandbox` sandboxes its commands where it can; Claude Code's file tools are never
-  sandboxed, and on native Windows neither are its commands. Options (research §7.6): macOS `sandbox-exec`, Linux
-  bubblewrap, Windows MXC (`@microsoft/mxc-sdk`, Windows 11 24H2 build 26100.9278 or later). Each CLI must keep its
-  sign-in (macOS Keychain, Windows Credential Manager, `~/.codex/auth.json`) and its network access to its vendor.
-- **A Windows Job Object**, so processes a worker or an acceptance command leaves running are stopped. Node can't make
-  one alone: it needs a small native library (for example the `koffi` FFI library) or the MXC SDK.
+  sandboxed, and on native Windows neither are its commands. Options: macOS `sandbox-exec`, Linux bubblewrap; on
+  Windows none for now (MXC was not allowed, see the decision above). Each CLI must keep its sign-in (macOS Keychain,
+  `~/.claude/.credentials.json` on Linux, `~/.codex/auth.json`) and its network access to its vendor.
+  Found on the owner's Mac (macOS 26): in a `sandbox-exec` profile the later rule wins, and a sandbox can't be applied
+  inside another one that restricts anything ("sandbox_apply: Operation not permitted"). So wrapping Codex or `agy` in
+  an outer sandbox on macOS breaks their own command sandboxes; only Claude workers (which have none) can be wrapped
+  there as they are. What Claude Code writes outside its worktree (`~/.claude.json`, `~/.claude/`, caches, temp
+  folders, the Keychain, a self-update) must be known first: none of the engines is installed on that Mac.
 - **The engines on the owner's machine** (research §10): the flags and event shapes the adapters use (`agy`'s come
   from docs only), the answers of `claude auth status`, `codex login status` and `agy -p /usage`, whether
   `codex exec` finds a Windows sandbox, and for Claude: whether `--settings` takes inline JSON on the owner's version,
@@ -148,9 +159,12 @@ machine and a decision (see open decisions):
   `permissionMode`, `mcp_servers`, `tools` and `cwd` (missing ones fail the run), and whether Claude Code's npm
   package still has `cli.js` for the Windows shim (otherwise its arguments would need cmd.exe, which Orchestra
   refuses for them). For `agy`: whether closing stdin ends the session before the turn finishes, and its oldest
-  usable version.
-- **Tests:** the sandbox and the Job Object get fake-engine tests that try to write outside the worktree and leave
-  processes behind; CI runs them on Windows and Linux.
+  usable version. On Windows, inside the Job Object (no breakaway): whether browser tests in acceptance commands
+  (Playwright, Puppeteer: Chromium's sandbox uses jobs of its own) still work, and that build daemons (Gradle, MSBuild
+  node reuse) are now stopped when the command that started them exits, as on Linux and macOS when they stay in the
+  process group.
+- **Tests:** the sandbox gets fake-engine tests that try to write outside the worktree; CI runs them on Linux. (The
+  Job Object's tests leave processes behind, also detached ones, and run on Windows CI.)
 
 After that, one line each (details in PLAN.md):
 
@@ -180,9 +194,13 @@ After that, one line each (details in PLAN.md):
 - **A project's own `.claude/settings.json`** can set environment variables (`env`) for Claude, such as a provider
   switch or a base URL, that the worker environment leaves out; whether Claude then still reports
   `apiKeySource: "none"` must be checked on the owner's machine (step 10 part 2).
-- **Processes:** a process the engine started in a session of its own is not stopped and can keep its output open
-  (`mayStillBeRunning`). Worker runs don't record a process id, so after a conductor crash a worker can outlive it
-  (step 12). Detection probes and acceptance commands have no deadline if stopping them fails (workers do).
+- **Processes:** on Linux and macOS, a process the engine started in a session of its own is not stopped and can keep
+  its output open (`mayStillBeRunning`), and after a conductor crash a worker can outlive it (worker runs don't record
+  a process id; step 12). On Windows the Job Object stops all of these, also when Orchestra crashes. It cleans up; it
+  is not a wall: a process that tries to get out can (through WMI, Task Scheduler, a COM server or Explorer, by naming
+  another process as its parent, or by taking the job's handle from Orchestra's process, same user, and changing its
+  limits). Only a sandbox closes that, and Windows has none in Orchestra for now. If Orchestra itself runs in a job
+  that sets UI limits, no job can be nested in it, and nothing runs (the error says so). Detection probes and acceptance commands have no deadline if stopping them fails (workers do).
 - **What a worker may do besides editing its worktree.** Claude workers run in `acceptEdits` mode on project settings
   only; a repository the user trusted in Claude Code can widen this with its own `.claude/settings.json` (allow rules,
   extra directories; an API key helper makes the run fail on API billing). Workers can read anything the user can,
@@ -210,8 +228,8 @@ After that, one line each (details in PLAN.md):
 - **Integrity before scope:** `checkScope` trusts the repository's config (filters run during its `git add`), so it must
   only run after `checkIntegrity` passed.
 - **Acceptance commands run the worker's code** (its tests) with the user's rights. On timeout their whole process tree
-  is stopped; on Linux and macOS, processes they leave running are stopped too, but on Windows those need a Job
-  Object. The same holds for workers (`runWorker`). Both belong with the sandbox in step 10 part 2.
+  is stopped, and so is whatever they leave running when they exit (a Job Object on Windows). Running them inside the
+  sandbox belongs with the rest of step 10 part 2.
 - **Fresh worktrees have no installed dependencies.** Task and check worktrees hold the committed files only, so
   acceptance commands must set up what they need (for example `npm ci` before `npm test`) until opt-in copying of
   ignored files exists (research §7.4; it belongs with the engines and briefs, steps 10–11).
@@ -263,9 +281,6 @@ Ask the owner only when the work needs the answer, one question at a time.
 - **Worker tools:** Claude workers have no shell by default (PLAN §4), while the owner said the user decides what
   agents may do. Keep the shell off unless a run allows it (`shell`), or allow it by default? On native Windows a
   Claude worker's commands are not sandboxed until step 10 part 2.
-- **Containment dependencies (step 10 part 2):** the Windows Job Object needs a small native library (for example
-  `koffi`), and a Windows sandbox would use Microsoft's MXC SDK (its required telemetry can't be turned off). Confirm
-  before either is added.
 - **Files changed both by the user and by the run** (on the user's branch while the run was going): finalize checks
   currently allow them when git merges them cleanly and the tests pass on the merged result, and list them in the
   report. The stricter option refuses any such file. Confirm with the owner.
