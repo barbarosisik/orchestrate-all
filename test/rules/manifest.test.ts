@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildRulesManifest, type ManifestOptions, type RuleFileEntry, type RulesManifest } from '../../src/rules/manifest.js';
+import { runGit } from '../../src/git/run.js';
+import { buildRulesManifest, MAX_RULE_FILE_BYTES, type ManifestOptions, type RuleFileEntry, type RulesManifest } from '../../src/rules/manifest.js';
 import { makeFixture, type Fixture } from '../helpers/fixture.js';
 import type { TmpRepo } from '../helpers/tmprepo.js';
 
@@ -221,15 +223,19 @@ describe('rules manifest: files in the base commit', () => {
     f.repo.git('config', 'core.symlinks', 'true');
     expect((await manifestOf(f)).linksAsText).toBe(false);
     f.repo.git('config', '--unset', 'core.symlinks');
-    expect((await manifestOf(f)).linksAsText).toBe(WINDOWS);
+    // Git for Windows may set it system-wide; only an unset value falls back to the platform's default.
+    const anywhere = await runGit(['config', '--type=bool', '--get', 'core.symlinks'], { cwd: f.repo.dir });
+    const expected = anywhere.code === 1 ? WINDOWS : anywhere.stdout.trim() === 'false';
+    expect((await manifestOf(f)).linksAsText).toBe(expected);
   });
 
   it('never points at names that are odd in a brief or on Windows', async () => {
     const f = setup({ 'README.md': 'hi\n' });
-    const base = plumbingCommit(f.repo, { 'a<b/AGENTS.md': 'x\n', 'c:d/CLAUDE.md': 'y\n', 'AGENTS.md': 'ok\n' });
+    const odd = ['a<b/AGENTS.md', 'c:d/CLAUDE.md', 'con/AGENTS.md', '.claude/rules/aux.md', 'x./GEMINI.md', 'q`/AGENTS.md'];
+    const base = plumbingCommit(f.repo, { ...Object.fromEntries(odd.map((p) => [p, 'x\n'])), 'AGENTS.md': 'ok\n' });
     const m = await manifestOf(f, { baseSha: base });
-    expect(codes(entry(m, 'a<b/AGENTS.md'))).toEqual(['odd-name']);
-    expect(codes(entry(m, 'c:d/CLAUDE.md'))).toEqual(['odd-name']);
+    for (const path of odd) expect(codes(entry(m, path)), path).toEqual(['odd-name']);
+    expect(entry(m, 'a<b/AGENTS.md').flags[0]?.message.startsWith('"a<b/AGENTS.md" has a name')).toBe(true);
   });
 
   it('reads at most maxFiles rule files and flags the rest as unchecked', async () => {
@@ -237,6 +243,36 @@ describe('rules manifest: files in the base commit', () => {
     const m = await manifestOf(f, { maxFiles: 2 });
     expect(codes(entry(m, 'a/AGENTS.md'))).toEqual([]);
     expect(codes(entry(m, 'c/AGENTS.md'))).toEqual(['unchecked']);
+  });
+
+  it('lists rule files too large to read, or past the total it reads, as unchecked', async () => {
+    const f = setup({ 'big/AGENTS.md': 'x'.repeat(MAX_RULE_FILE_BYTES + 1), 'a/AGENTS.md': 'one\n', 'b/AGENTS.md': 'two \u202E\n' });
+    const m = await manifestOf(f);
+    expect(codes(entry(m, 'big/AGENTS.md'))).toContain('unchecked');
+    expect(codes(entry(m, 'b/AGENTS.md'))).toEqual(['hidden-unicode']);
+    const capped = await manifestOf(f, { maxTotalBytes: 4 });
+    expect(codes(entry(capped, 'a/AGENTS.md'))).toEqual([]);
+    expect(entry(capped, 'b/AGENTS.md').flags).toEqual([{ code: 'unchecked', message: 'b/AGENTS.md was not read (the run reads at most 4 bytes of rule files), so it was not checked.' }]);
+  });
+
+  it('lists a file once when the base commit has it and the checkout no longer tracks it', async () => {
+    const f = setup({ 'AGENTS.md': 'x\n', 'pkg/AGENTS.md': 'pkg\n' });
+    f.repo.git('rm', '-q', '--cached', 'pkg/AGENTS.md');
+    f.repo.git('commit', '-q', '-m', 'untrack');
+    const m = await manifestOf(f);
+    expect(m.files.filter((e) => e.path === 'pkg/AGENTS.md')).toHaveLength(1);
+    expect(entry(m, 'pkg/AGENTS.md').source).toBe('committed');
+  });
+
+  it('refuses rule files whose stored object was changed', async () => {
+    const f = setup({ 'AGENTS.md': 'real rules\n' });
+    const id = f.repo.git('rev-parse', 'HEAD:AGENTS.md');
+    const file = join(f.repo.dir, '.git', 'objects', id.slice(0, 2), id.slice(2));
+    chmodSync(file, 0o644);
+    writeFileSync(file, deflateSync(Buffer.from('blob 11\u0000fake rules\n')));
+    const result = await buildRulesManifest(f.ctx, { baseSha: f.base, home: tempDir(), env: {} });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.problem).toContain('does not match its id');
   });
 
   it('refuses a base commit that is not in the repository', async () => {

@@ -28,6 +28,7 @@ import { envFolder } from '../engines/agent-config.js';
 import { repoGit, repoGitRaw, worktreeGit, type RepoContext } from '../git/context.js';
 import { readVerifiedObjects } from '../git/objects.js';
 import { describeGitFailure, LONG_GIT_TIMEOUT_MS } from '../git/run.js';
+import { windowsPathIssue } from '../plan/paths.js';
 import type { EngineName } from '../plan/schema.js';
 import { canonicalPath, samePath } from '../repo/canonical.js';
 import { parseStatusZ } from '../repo/status.js';
@@ -136,6 +137,8 @@ export interface ManifestOptions {
   readonly linksAsText?: boolean;
   /** Rule files read at most; the rest are listed unchecked. Defaults to DEFAULT_MAX_RULE_FILES. */
   readonly maxFiles?: number;
+  /** Bytes of rule files read at most, all together (tests; defaults to 16 MiB). */
+  readonly maxTotalBytes?: number;
 }
 
 export type ManifestResult = { ok: true; manifest: RulesManifest } | { ok: false; problem: string };
@@ -172,9 +175,13 @@ export function shownPath(path: string): string {
   return isOddName(path) ? JSON.stringify(path) : path;
 }
 
-/** True for names a brief can't show safely or Windows can't open (control characters, < > ` \\ :, empty or dot segments). */
+/**
+ * True for names a brief can't show safely or Windows can't open: control characters, < > ` \\ : and the other
+ * characters Windows refuses, device names (CON, AUX.md, ...), short names, names ending in a dot or space, and
+ * empty or dot segments. Such files are listed but never read from the checkout or pointed at.
+ */
 export function isOddName(path: string): boolean {
-  return ODD_NAME.test(path) || path.split('/').some((s) => s === '' || s === '.' || s === '..');
+  return ODD_NAME.test(path) || windowsPathIssue(path) !== null || path.split('/').some((s) => s === '.' || s === '..');
 }
 
 function sameText(a: string, b: string): boolean {
@@ -228,14 +235,20 @@ async function readDrafts(
   key: (path: string) => string,
   linksAsText: boolean,
   maxFiles: number,
+  maxTotal: number,
 ): Promise<string | null> {
   const wanted: Draft[] = [];
   let total = 0;
   for (const draft of drafts) {
     if (draft.flags.length > 0) continue;
     const size = draft.blob.size;
-    if (wanted.length >= maxFiles || size > MAX_RULE_FILE_BYTES || total + size > MAX_TOTAL_READ_BYTES) {
-      const why = size > MAX_RULE_FILE_BYTES ? `it is larger than ${MAX_RULE_FILE_BYTES} bytes` : `the run reads at most ${maxFiles} rule files`;
+    if (wanted.length >= maxFiles || size > MAX_RULE_FILE_BYTES || total + size > maxTotal) {
+      const why =
+        size > MAX_RULE_FILE_BYTES
+          ? `it is larger than ${MAX_RULE_FILE_BYTES} bytes`
+          : wanted.length >= maxFiles
+            ? `the run reads at most ${maxFiles} rule files`
+            : `the run reads at most ${maxTotal} bytes of rule files`;
       draft.flags.push(flag('unchecked', `${draft.blob.path} was not read (${why}), so it was not checked.`));
       continue;
     }
@@ -501,7 +514,7 @@ export async function buildRulesManifest(ctx: RepoContext, opts: ManifestOptions
     importsOnly: false,
     flags: isOddName(blob.path) ? [flag('odd-name', `${shownPath(blob.path)} has a name a brief can't show safely or Windows can't open; workers are not pointed at it.`)] : [],
   }));
-  const failed = await readDrafts(ctx, drafts, keys, key, linksAsText, opts.maxFiles ?? DEFAULT_MAX_RULE_FILES);
+  const failed = await readDrafts(ctx, drafts, keys, key, linksAsText, opts.maxFiles ?? DEFAULT_MAX_RULE_FILES, opts.maxTotalBytes ?? MAX_TOTAL_READ_BYTES);
   if (failed !== null) return { ok: false, problem: failed };
   for (const draft of drafts) {
     if (draft.flags.some((f) => f.code === 'odd-name')) continue;

@@ -179,6 +179,9 @@ describe('rules for a task', () => {
     ]);
     expect(paths(m, 'codex', ['pkg/', 'a<b/'])).toEqual(['CLAUDE.md']);
     expect(rulesForTask(manifest([file('CLAUDE.local.md', { source: 'ignored' })]), { owns: [] }, 'codex').any).toBe(false);
+    // An odd-named rule file leads nowhere either, not even to the files it imports.
+    const oddImporter = manifest([file('q`/CLAUDE.md', { imports: ['docs/style.md'], flags: ['odd-name'] })]);
+    expect(paths(oddImporter, 'codex', ['q`/x.ts'])).toEqual([]);
   });
 
   it('lists each file once, the top folder first', () => {
