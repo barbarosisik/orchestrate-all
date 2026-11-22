@@ -154,8 +154,9 @@ describe('runCommand', () => {
     expect(result.program).toBe(file);
   });
 
-  it("doesn't wait forever for output a process outside the command's tree keeps open", async () => {
-    // The child starts its own process group, so it survives the command, and keeps stdout open.
+  // On Windows a detached child is still in the command's Job Object: the next test.
+  it.skipIf(WINDOWS)("doesn't wait forever for output a process outside the command's tree keeps open", async () => {
+    // The child starts a session of its own, so it survives the command, and keeps stdout open.
     const code =
       "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], " +
       "{ detached: true, cwd: require('node:os').tmpdir(), stdio: ['ignore', 'inherit', 'inherit'] }); " +
@@ -174,6 +175,13 @@ describe('runCommand', () => {
         }
       }
     }
+  });
+
+  it.runIf(WINDOWS)('on Windows, stops a process started detached that holds the output, so the output closes', async () => {
+    const child = `setTimeout(() => {}, 20000)`;
+    const code = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(child)}], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }).unref();`;
+    const result = await runCommand(tempDir(), node(code));
+    expect(result).toMatchObject({ status: 'passed', error: null });
   });
 
   it('takes a time limit too long for a timer as the longest one, instead of stopping the command at once', async () => {
