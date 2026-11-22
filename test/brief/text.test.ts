@@ -14,7 +14,7 @@ describe('brief text', () => {
   });
 
   it('shows hidden characters in both', () => {
-    expect(asBriefText('a‮b')).toBe('a[U+202E]b');
+    expect(asBriefText('a\u202Eb')).toBe('a[U+202E]b');
     expect(asData('a\u{E0041}b')).toBe('a[U+E0041]b');
   });
 

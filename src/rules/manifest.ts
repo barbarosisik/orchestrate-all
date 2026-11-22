@@ -185,7 +185,7 @@ export function isOddName(path: string): boolean {
 }
 
 function sameText(a: string, b: string): boolean {
-  const plain = (text: string): string => text.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+  const plain = (text: string): string => text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
   return plain(a) === plain(b);
 }
 

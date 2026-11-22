@@ -123,7 +123,7 @@ describe('rules manifest: files in the base commit', () => {
   });
 
   it('flags hidden characters', async () => {
-    const f = setup({ 'AGENTS.md': 'Be careful.‮ secret\n', 'GEMINI.md': 'fine\n' });
+    const f = setup({ 'AGENTS.md': 'Be careful.\u202E secret\n', 'GEMINI.md': 'fine\n' });
     const m = await manifestOf(f);
     const flag = entry(m, 'AGENTS.md').flags.find((x) => x.code === 'hidden-unicode');
     expect(flag?.message).toContain('U+202E');
@@ -239,7 +239,7 @@ describe('rules manifest: files in the base commit', () => {
   });
 
   it('reads at most maxFiles rule files and flags the rest as unchecked', async () => {
-    const f = setup({ 'a/AGENTS.md': 'one\n', 'b/AGENTS.md': 'two\n', 'c/AGENTS.md': 'three ‮\n' });
+    const f = setup({ 'a/AGENTS.md': 'one\n', 'b/AGENTS.md': 'two\n', 'c/AGENTS.md': 'three \u202E\n' });
     const m = await manifestOf(f, { maxFiles: 2 });
     expect(codes(entry(m, 'a/AGENTS.md'))).toEqual([]);
     expect(codes(entry(m, 'c/AGENTS.md'))).toEqual(['unchecked']);
@@ -317,7 +317,7 @@ describe('rules manifest: personal rule files', () => {
     put(join(home, '.claude', 'CLAUDE.md'), 'personal\n');
     put(join(home, '.claude', 'rules', 'mine.md'), 'mine\n');
     put(join(home, '.codex', 'AGENTS.override.md'), '');
-    put(join(home, '.codex', 'AGENTS.md'), 'codex ​ rules\n');
+    put(join(home, '.codex', 'AGENTS.md'), 'codex \u200B rules\n');
     put(join(home, '.gemini', 'GEMINI.md'), 'g\n');
     put(join(home, '.gemini', 'config', 'rules', 'r.md'), 'r\n');
     put(join(home, '.gemini', 'notes.txt'), 'not a rule file\n');
@@ -331,7 +331,7 @@ describe('rules manifest: personal rule files', () => {
     ]);
     const codex = m.globals.find((g) => g.engine === 'codex');
     expect(codex?.flags.map((x) => x.code)).toEqual(['hidden-unicode']);
-    expect(codex?.size).toBe(Buffer.byteLength('codex ​ rules\n'));
+    expect(codex?.size).toBe(Buffer.byteLength('codex \u200B rules\n'));
   });
 
   it('follows CODEX_HOME and CLAUDE_CONFIG_DIR, and a non-empty override wins', async () => {
@@ -355,7 +355,7 @@ describe('rules manifest: personal rule files', () => {
     const f = setup({ 'AGENTS.md': 'x\n' });
     const home = tempDir();
     const elsewhere = join(tempDir(), 'real.md');
-    put(elsewhere, 'hidden ‮\n');
+    put(elsewhere, 'hidden \u202E\n');
     mkdirSync(join(home, '.gemini'), { recursive: true });
     symlinkSync(elsewhere, join(home, '.gemini', 'GEMINI.md'));
     const m = await manifestOf(f, { home });
