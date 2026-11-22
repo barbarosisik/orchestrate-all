@@ -44,10 +44,12 @@ treat it as background only: where it disagrees with this file or PLAN.md, these
 | Tests: 923 passing on macOS (9 more run only on Windows); CI runs Windows + Linux (Node 22 and 24); engines are tested against fake engines only | `test/`, `.github/workflows/ci.yml` |
 
 **CI** runs on pull requests and on pushes to `main`. Steps 3–5 went into `dev` through PR #1, step 6 through PR #2,
-step 7 through PR #3, step 8 through PR #4, step 9 through PR #5 and step 10's first part through PR #6, all green on
-Windows and Linux (the first runs found test-only problems: git's `C:/` paths, hidden `.git` files, Linux running a
-script without `#!` through `sh`, a Windows folder held by a test's process, in step 8 a test that assumed letter
-case is ignored, as on Windows and macOS but not Linux, and in step 10 a test program without a Windows extension).
+step 7 through PR #3, step 8 through PR #4, step 9 through PR #5, step 10's first part through PR #6 and the Job
+Object through PR #7, all green on Windows and Linux (the first runs found test-only problems: git's `C:/` paths,
+hidden `.git` files, Linux running a script without `#!` through `sh`, a Windows folder held by a test's process, in
+step 8 a test that assumed letter case is ignored, as on Windows and macOS but not Linux, in step 10 a test program
+without a Windows extension, and for the Job Object a test expecting a detached process to outlive its command on
+Windows, which the job now stops).
 
 **Review:** an independent review of steps 3–5 found 9 problems (a `git.exe` planted in a worktree, task branches turned
 into links to the user's branch, rewritten git objects, unwatched included config, links in Orchestra's folders, a
