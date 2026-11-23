@@ -7,11 +7,12 @@
 **Orchestra**: describe a coding task once. An AI orchestrator splits it across Claude Code, Codex and Antigravity
 workers, and a plain-code conductor makes sure they never clash.
 
-> **Status: early build (Phase 1: steps 1–9 and 11 of 15, and part of step 10).** The plan checks, repository
-> checks, worktree manager, tamper checks, scope check, acceptance runner, merging, finalize checks, run store, engine
-> adapters (detection and worker runs, tested against fake engines only, with every process they start stopped
-> with all it started, on Windows through a Job Object), the rules manifest and the worker briefs exist; no run on a
-> real project yet.
+> **Status: early build (Phase 1: steps 1–9 and 11 of 15, the run manager of step 12, and part of step 10).** The
+> plan checks, repository checks, worktree manager, tamper checks, scope check, acceptance runner, merging, finalize
+> checks, run store, engine adapters (detection and worker runs, tested against fake engines only, with every process
+> they start stopped with all it started, on Windows through a Job Object), the rules manifest, the worker briefs and
+> the run manager (which drives a run from the approved plan to the finalize report and carries on after a crash)
+> exist; the background service around it is next. No run on a real project yet.
 > Everything else below describes the plan. Facts about vendor CLIs are still being verified. Progress is tracked
 > in [docs/PLAN.md](docs/PLAN.md).
 

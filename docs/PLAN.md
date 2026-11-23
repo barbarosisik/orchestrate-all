@@ -1,6 +1,6 @@
 # Orchestra plan
 
-**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) in progress: the Windows Job Object is done (2026-11-22); step 11 (rules manifest and briefs) done (2026-11-22). This file is the single planning document: goal, rules, decisions,
+**Status:** Phase 1, steps 1–9 done, step 10 part 1 (engines) done; step 10 part 2 (containment) in progress: the Windows Job Object is done (2026-11-22); step 11 (rules manifest and briefs) done (2026-11-22); step 12 in two parts: 12a (the run manager) done (2026-11-23), 12b (the background service) next. This file is the single planning document: goal, rules, decisions,
 defaults and build order. The design reasoning lives in the [README](../README.md) and [research](research.md).
 
 ## 1. Goal
@@ -64,7 +64,11 @@ These are the defaults the code uses until you say otherwise. Each is a config v
 | Acceptance commands | Run by the conductor without a shell; programs found in PATH only, never in the worktree. On Windows, npm and npx run through node, and other `.cmd`/`.bat` files only with arguments cmd.exe can't act on. They get an allowlisted environment (no API keys or tokens) plus `CI=true`. Output is kept up to 256 KiB per stream. |
 | Project rules for workers | Each engine loads the project's rule files itself. Before planning, the conductor lists every rule file in the base commit and the files they import (and, as warnings, the ones only in your checkout, links checked out as text or leading out of the repository, files over an engine's limit, hidden characters, a CLAUDE.md that differs from its AGENTS.md), and your personal rule files. Orchestra never follows a link, nor points a worker through one. The orchestrator gets that list, never the rule text. Each brief points its worker, by path, at the rule files that apply to its files and that its engine won't load by itself, plus one fixed precedence paragraph. Uncommitted and ignored rule files are shown, never given to workers. |
 | Briefs | One fixed template rendered by code from the approved plan: the files the task may change, the reserved files, the constraints, the acceptance commands, when to stop, and the result format. Text from the plan and from earlier workers can't end its block. Each round's brief is saved in the run folder before the worker starts. Every worker ends with one JSON result, which is only its own account: the conductor checks the diff and runs the commands itself. |
-| Approval | A native Windows dialog shown by the conductor |
+| Approval | A native Windows dialog shown by the conductor (step 13). Until it exists, nothing can be approved, so no run starts. The approval is bound to the plan's hash. |
+| One conductor per home | A lock file under `<home>/service/` names the process driving the home's runs (its id and the system's start time of that process); a lock whose process ended, or whose id now names a process that started at another time, is replaced; one that might still be held never is. |
+| Crashes | Git steps come before the state write that records them; on restart, a commit or merge git made but the state didn't record is recorded once checked as the step itself would have. A round interrupted after its worker started is not carried on: the task fails (its checks' baseline is gone with the old process). A worker that outlived the conductor is stopped only after checking its id, its start time and that it works in its task's worktree; on Windows its Job Object already stopped it. |
+| Acceptance on the combined result | At the finalize checks only; after every merge too when the config asks for it (`checkAfterEachMerge`). |
+| Worker results | Each round's JSON result is kept in the run folder with how its list of changed files compares with the real diff; dependents' briefs quote it, as data. |
 | `.env` copying | Never, unless you opt in per repo |
 | Ignored files in a task's worktree | Listed in the scope report (marked when inside the task's owned paths), never committed, not counted as a violation |
 | Tamper checks | Remote-tracking refs are left out (an editor's background fetch moves them). Anything else of yours that changes during a run (a commit on your branch, a branch switch) is reported, even if you did it. In your index, only entries hidden from `git status` are watched; ordinary staging isn't reported. |
@@ -88,7 +92,8 @@ Built test-first, with at least 80% coverage. Steps marked ☁ can be built and 
 | 10 | Engine detection + adapters for Claude, Codex and `agy`, tested against fake engines; worker runs into the run folder; agent config folders compared | ☁ | done (part 1) |
 | 10b | Containment: an OS sandbox around each whole worker (only its worktree writable), a Windows Job Object for leftover processes; the engine flags checked on your machine | 🖥 | Job Object done |
 | 11 | Rules manifest + brief builder | ☁ | done |
-| 12 | Daemon (lazy start, token, crash recovery) | ☁ | |
+| 12a | Run manager: drives a run from the approved plan to the finalize report, one conductor per home (lock), crash recovery | ☁ | done |
+| 12b | Background service: HTTP on 127.0.0.1 with a random token, one instance per home, lazy start, run status and an event stream | ☁ | |
 | 13 | Approval dialog | 🖥 | |
 | 14 | MCP shim + `orchestrate-all` skill + installer for both front doors | ☁ then 🖥 | |
 | 15 | Phase 0 checks on your PC ([research §10](research.md#10-must-verify-on-your-machine-phase-0-checklist)) and the end-to-end demo | 🖥 | |
