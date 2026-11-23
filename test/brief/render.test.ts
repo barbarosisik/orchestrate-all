@@ -240,7 +240,7 @@ describe('worker brief', () => {
     const data = block(brief, 'upstream_results');
     expect(data.match(/^<upstream /gm)?.length).toBe(data.match(/^<\/upstream>$/gm)?.length);
     expect(data).toContain('left out to keep the brief short');
-  });
+  }, 180_000); // CPU-bound: slow when the whole suite runs in parallel with coverage.
 
   it('only takes upstream results from tasks this one depends on', () => {
     expect(() => renderBrief(input({ taskId: 'api', upstream: [{ taskId: 'web', commit: 'd'.repeat(40), files: [], result: null }] }))).toThrow(/does not depend on/);

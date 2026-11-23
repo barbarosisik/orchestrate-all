@@ -557,10 +557,16 @@ describe('findings of the independent review', () => {
   it('close keeps the run claimed until a slow write already queued has finished', async () => {
     const home = tempHome();
     let unblock: () => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const atRename = new Promise<void>((done) => (reached = done));
     let slow = false;
     const store = await create(home, sampleReady(TASKS), {
       rename: async (from, to) => {
-        if (slow) await new Promise<void>((done) => (unblock = done));
+        if (slow) {
+          const go = new Promise<void>((done) => (unblock = done));
+          reached();
+          await go;
+        }
         await rename(from, to);
       },
     });
@@ -568,7 +574,8 @@ describe('findings of the independent review', () => {
     const pending = store.updateTask('api', { status: 'working', startSha: BASE });
     let closed = false;
     const closing = store.close().then(() => (closed = true));
-    await new Promise((done) => setTimeout(done, 50));
+    // The write is held at its rename (on a busy machine it may take a while to get there).
+    await atRename;
     expect(closed).toBe(false);
     expect(code(await openRun(home, RUN))).toBe('busy');
     unblock();
