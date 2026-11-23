@@ -8,7 +8,9 @@
  *   it through node), and for `agy` a `.cmd` that cmd.exe runs.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import type { EngineName } from '../../src/plan/schema.js';
 
@@ -136,9 +138,48 @@ export function installFakeEngine(bin: string, engine: EngineName, scenario: Fak
   };
 }
 
-/** An environment whose PATH reaches the fakes in `bin` and node, plus `extra`. */
+const NODE_NAME = process.platform === 'win32' ? 'node.exe' : 'node';
+
+/**
+ * A folder holding node and nothing else, shared by every test process. Node's own folder must never be on a test's
+ * PATH: npm installs global programs there (the real claude and codex among them), and tests never run those.
+ */
+export function nodeOnlyFolder(): string {
+  const folder = join(tmpdir(), 'orch-node-only', createHash('sha256').update(process.execPath).digest('hex').slice(0, 16));
+  if (existsSync(join(folder, NODE_NAME))) {
+    assertNodeOnly(folder);
+    return folder;
+  }
+  mkdirSync(dirname(folder), { recursive: true });
+  const draft = mkdtempSync(`${folder}-`);
+  const target = join(draft, NODE_NAME);
+  try {
+    symlinkSync(process.execPath, target);
+  } catch {
+    try {
+      linkSync(process.execPath, target);
+    } catch {
+      copyFileSync(process.execPath, target);
+    }
+  }
+  try {
+    renameSync(draft, folder);
+  } catch {
+    // Another test process made it first.
+    rmSync(draft, { recursive: true, force: true });
+  }
+  assertNodeOnly(folder);
+  return folder;
+}
+
+function assertNodeOnly(folder: string): void {
+  const names = readdirSync(folder);
+  if (names.length !== 1 || names[0] !== NODE_NAME) throw new Error(`${folder} must hold only ${NODE_NAME}, not: ${names.join(', ')}`);
+}
+
+/** An environment whose PATH reaches the fakes in `bin` and node (never node's own folder), plus `extra`. */
 export function fakeEnv(bin: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { PATH: [bin, dirname(process.execPath)].join(delimiter) };
+  const env: NodeJS.ProcessEnv = { PATH: [bin, nodeOnlyFolder()].join(delimiter) };
   // Copied under their own spelling: Windows names ignore case, and a second spelling would be a duplicate.
   const wanted = new Set(['SYSTEMROOT', 'PATHEXT', 'HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP']);
   for (const [name, value] of Object.entries(process.env)) {
