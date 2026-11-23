@@ -112,3 +112,27 @@ describe('runAcceptanceGate', () => {
     },
   );
 });
+
+describe('runAcceptanceGate and the run manager', () => {
+  it("runs its integrity and scope checks inside the caller's exclusive section, the commands outside it", async () => {
+    const c = await committedTask();
+    const events: string[] = [];
+    let depth = 0;
+    const exclusive = async <T,>(work: () => Promise<T>): Promise<T> => {
+      depth++;
+      events.push(`enter ${depth}`);
+      try {
+        return await work();
+      } finally {
+        depth--;
+        events.push('leave');
+      }
+    };
+    const result = await runAcceptanceGate(c.fx.ctx, c.wt, task([node('process.exit(0)')]), { baseline: c.baseline, commit: c.commit }, {
+      integrity: integrityOpts,
+      exclusive,
+    });
+    expect(result.passed).toBe(true);
+    expect(events).toEqual(['enter 1', 'leave', 'enter 1', 'leave']);
+  });
+});

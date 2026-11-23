@@ -14,7 +14,7 @@
  */
 
 import type { GateOptions, GateResult } from '../accept/gate.js';
-import { runAcceptanceGate } from '../accept/gate.js';
+import { NOT_EXCLUSIVE, runAcceptanceGate } from '../accept/gate.js';
 import type { CommandResult } from '../accept/run.js';
 import type { RepoContext } from '../git/context.js';
 import { checkIntegrity, takeBaseline } from '../integrity/check.js';
@@ -90,13 +90,14 @@ export async function checkCombined(ctx: RepoContext, input: CombinedInput, opts
     cleanup,
   });
 
-  const created = await createCheckWorktree(ctx, { runId, name, tip });
+  const exclusive = opts.exclusive ?? NOT_EXCLUSIVE;
+  const created = await exclusive(() => createCheckWorktree(ctx, { runId, name, tip }));
   if (!created.ok) return notRun(`The check worktree could not be made: ${created.error.message}`);
   const wt = created.worktree;
 
   let result: Omit<CombinedResult, 'cleanup'>;
   try {
-    const before = await checkIntegrity(ctx, wt, await takeBaseline(ctx, opts.integrity), tip, opts.integrity);
+    const before = await exclusive(async () => checkIntegrity(ctx, wt, await takeBaseline(ctx, opts.integrity), tip, opts.integrity));
     if (!before.ok) {
       result = notRun(`The new check worktree failed its integrity check: ${before.violations.map((v) => v.message).join(' ')}`);
     } else {
@@ -119,6 +120,6 @@ export async function checkCombined(ctx: RepoContext, input: CombinedInput, opts
     result = notRun(`The checks stopped: ${errorText(error)}`);
   }
 
-  const removed = await removeTaskWorktree(ctx, wt);
+  const removed = await exclusive(() => removeTaskWorktree(ctx, wt));
   return { ...result, cleanup: removed.ok ? [] : removed.problems };
 }

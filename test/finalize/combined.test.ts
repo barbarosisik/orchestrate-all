@@ -110,3 +110,27 @@ describe('checkCombined', () => {
     expect(missing).toMatchObject({ passed: false, problem: expect.stringContaining('does not exist') });
   });
 });
+
+describe('checkCombined and the run manager', () => {
+  it("makes, checks and removes its worktree inside the caller's exclusive sections, never nested", async () => {
+    const fx = f.make({ files: FILES });
+    const tip = await merge(fx, api, await startRun(fx), { 'src/api/routes.txt': 'a\n' });
+    let depth = 0;
+    let deepest = 0;
+    let sections = 0;
+    const exclusive = async <T,>(work: () => Promise<T>): Promise<T> => {
+      depth++;
+      sections++;
+      deepest = Math.max(deepest, depth);
+      try {
+        return await work();
+      } finally {
+        depth--;
+      }
+    };
+    const result = await checkCombined(fx.ctx, { runId: 'run1', name: 'integration', tip, tasks: [api] }, { integrity, exclusive });
+    expect(result.passed).toBe(true);
+    expect(sections).toBeGreaterThanOrEqual(5);
+    expect(deepest).toBe(1);
+  });
+});

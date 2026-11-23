@@ -9,6 +9,8 @@
  *   and macOS the command runs in its own process group, which is killed; on Windows it runs in a Job Object of
  *   its own, without which it is not run. Processes a command leaves running when it exits are stopped too.
  * - Output is kept up to a limit per stream: the start and, mostly, the end (where test runners summarize).
+ * - A signal stops the command and its tree at once (the run was cancelled, or Orchestra is closing); commands not
+ *   started yet are then not run.
  */
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
@@ -56,6 +58,8 @@ export interface AcceptanceResult {
 
 export interface RunOptions extends CommandEnvOptions {
   readonly timeoutMs?: number;
+  /** Aborting it stops the running command with its whole tree; later commands don't start. */
+  readonly signal?: AbortSignal;
   readonly maxOutputBytes?: number;
   /** Base environment to filter; defaults to this process's environment. */
   readonly env?: NodeJS.ProcessEnv;
@@ -138,14 +142,20 @@ export function launchCommand(
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
   maxOutputBytes: number,
+  signal?: AbortSignal,
 ): Promise<CommandResult> {
   const limit = timerDelay(timeoutMs, DEFAULT_COMMAND_TIMEOUT_MS);
   return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve(notStarted(argv, launch.program, 'Not started: the run was stopped.'));
+      return;
+    }
     // A monotonic clock: a system clock set back during a command must not give a negative time.
     const started = performance.now();
     const stdout = new OutputCapture(maxOutputBytes);
     const stderr = new OutputCapture(maxOutputBytes);
     let timedOut = false;
+    let stopped = false;
     let exit: { code: number | null; signal: string | null } | null = null;
     let finished = false;
 
@@ -184,13 +194,14 @@ export function launchCommand(
       finished = true;
       clearTimeout(timer);
       clearTimeout(grace);
+      signal?.removeEventListener('abort', onAbort);
       tree.end();
       if (containError !== null) {
         resolve(notStarted(argv, launch.program, `Stopped as it started. ${containError}`));
         return;
       }
       const code = exit?.code ?? null;
-      const status: CommandStatus = timedOut ? 'timed-out' : code === 0 ? 'passed' : 'failed';
+      const status: CommandStatus = timedOut ? 'timed-out' : code === 0 && !stopped ? 'passed' : 'failed';
       resolve({
         argv,
         program: launch.program,
@@ -200,7 +211,7 @@ export function launchCommand(
         durationMs: Math.round(performance.now() - started),
         stdout: stdout.result(),
         stderr: stderr.result(),
-        error: timedOut ? `Stopped after ${Math.round(limit / 1000)} s.` : error,
+        error: timedOut ? `Stopped after ${Math.round(limit / 1000)} s.` : stopped ? 'Stopped: the run was stopped.' : error,
       });
     };
 
@@ -209,19 +220,27 @@ export function launchCommand(
       timedOut = true;
       tree.stop();
     }, limit);
+    const onAbort = (): void => {
+      if (exit !== null) return;
+      stopped = true;
+      tree.stop();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.on('data', (chunk: Buffer) => stdout.add(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.add(chunk));
     child.on('error', (error) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (exit === null && !finished) {
         finished = true;
         tree.end();
         resolve(notStarted(argv, launch.program, containError === null ? error.message : `Stopped as it started. ${containError}`));
       }
     });
-    child.on('exit', (code, signal) => {
-      exit = { code, signal };
+    child.on('exit', (code, sig) => {
+      exit = { code, signal: sig };
+      signal?.removeEventListener('abort', onAbort);
       // Anything the command left running is stopped (its process group, or its Job Object).
       tree.end();
       grace = setTimeout(() => {
@@ -248,6 +267,7 @@ export async function runCommand(cwd: string, argv: readonly string[], opts: Run
     env,
     opts.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
     opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+    opts.signal,
   );
 }
 
@@ -258,6 +278,12 @@ export async function runAcceptance(
   opts: RunOptions = {},
 ): Promise<AcceptanceResult> {
   const results: CommandResult[] = [];
-  for (const argv of commands) results.push(await runCommand(cwd, argv, opts));
+  for (const argv of commands) {
+    if (opts.signal?.aborted === true) {
+      results.push(notStarted(argv, null, 'Not started: the run was stopped.'));
+      continue;
+    }
+    results.push(await runCommand(cwd, argv, opts));
+  }
   return { passed: results.every((r) => r.status === 'passed'), commands: results };
 }

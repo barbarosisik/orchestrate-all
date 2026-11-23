@@ -19,7 +19,7 @@
  * every problem. `ready` is true only when there are no problems.
  */
 
-import type { GateOptions } from '../accept/gate.js';
+import { NOT_EXCLUSIVE, type GateOptions } from '../accept/gate.js';
 import { ORCHESTRA_GIT_IDENTITY } from '../config/defaults.js';
 import { repoGit, type RepoContext } from '../git/context.js';
 import { identityArgs } from '../git/identity.js';
@@ -210,7 +210,8 @@ export async function finalizeChecks(ctx: RepoContext, input: FinalizeInput, opt
     return report();
   }
 
-  const leftover = await clearFinalizeCheck(ctx, input.runId);
+  const exclusive = opts.exclusive ?? NOT_EXCLUSIVE;
+  const leftover = await exclusive(() => clearFinalizeCheck(ctx, input.runId));
   if (leftover.length > 0) {
     problems.push({ code: 'leftover', message: `An earlier finalize check left things behind: ${leftover.join(' ')}`, paths: [] });
     return report();
@@ -277,7 +278,7 @@ export async function finalizeChecks(ctx: RepoContext, input: FinalizeInput, opt
       notes.push(...acceptance.cleanup.map((c) => `Cleanup: ${c}`));
     }
   } finally {
-    const cleared = await clearFinalizeCheck(ctx, input.runId);
+    const cleared = await exclusive(() => clearFinalizeCheck(ctx, input.runId));
     notes.push(...cleared.map((c) => `Cleanup: ${c}`));
   }
   const moved = await integrationRefProblem(ctx, input.runId, input.integrationTip);

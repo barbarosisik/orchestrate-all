@@ -235,3 +235,37 @@ describe('runAcceptance', () => {
     expect(await runAcceptance(tempDir(), [])).toEqual({ passed: true, commands: [] });
   });
 });
+
+describe('stopping commands when the run stops', () => {
+  it('stops a running command with everything it started, and starts no more', async () => {
+    const dir = tempDir();
+    const marker = join(dir, 'child-ran.txt');
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 500);
+    const started = Date.now();
+    const result = await runAcceptance(dir, [node(`${leaveChildWriting(marker, 2500)} setInterval(() => {}, 1000);`), node('process.exit(0)')], {
+      signal: controller.signal,
+      timeoutMs: 60_000,
+    });
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(result.passed).toBe(false);
+    expect(result.commands[0]).toMatchObject({ status: 'failed', error: 'Stopped: the run was stopped.' });
+    expect(result.commands[1]).toMatchObject({ status: 'not-started', error: 'Not started: the run was stopped.' });
+    await delay(3000);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('starts nothing once the run was stopped', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runCommand(tempDir(), node('process.exit(0)'), { signal: controller.signal });
+    expect(result.status).toBe('not-started');
+  });
+
+  it('leaves a command that already ended as it was', async () => {
+    const controller = new AbortController();
+    const result = await runCommand(tempDir(), node('process.exit(0)'), { signal: controller.signal });
+    controller.abort();
+    expect(result.status).toBe('passed');
+  });
+});

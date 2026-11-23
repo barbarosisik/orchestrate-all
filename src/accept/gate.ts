@@ -26,10 +26,21 @@ export interface GateInput {
   readonly commit: string;
 }
 
+/**
+ * Runs `work` while no other part of the conductor creates or removes a worktree of the same repository (the run
+ * manager's lock, step 12): a half-made worktree must never be read as one of the user's.
+ */
+export type Exclusive = <T>(work: () => Promise<T>) => Promise<T>;
+
 export interface GateOptions {
   readonly run?: RunOptions;
   readonly integrity?: IntegrityOptions;
+  /** Wraps the integrity and scope checks (never the commands, which can take minutes). */
+  readonly exclusive?: Exclusive;
 }
+
+/** Runs work as it is, when no exclusive section is given. */
+export const NOT_EXCLUSIVE: Exclusive = (work) => work();
 
 export interface GateResult {
   readonly passed: boolean;
@@ -67,8 +78,9 @@ export async function runAcceptanceGate(
   input: GateInput,
   opts: GateOptions = {},
 ): Promise<GateResult> {
+  const exclusive = opts.exclusive ?? NOT_EXCLUSIVE;
   const acceptance = await runAcceptance(wt.path, task.acceptance.commands, opts.run);
-  const integrity = await checkIntegrity(ctx, wt, input.baseline, input.commit, opts.integrity);
+  const integrity = await exclusive(() => checkIntegrity(ctx, wt, input.baseline, input.commit, opts.integrity));
 
   let added: string[] = [];
   let trackedChanged: string[] = [];
@@ -76,7 +88,7 @@ export async function runAcceptanceGate(
   if (!integrity.ok) {
     scopeProblem = 'skipped, because the integrity check failed';
   } else {
-    const scope = await checkScope(ctx, wt, task, { fromCommit: input.commit });
+    const scope = await exclusive(() => checkScope(ctx, wt, task, { fromCommit: input.commit }));
     if (!scope.ok) {
       scopeProblem = scope.error.message;
     } else {
