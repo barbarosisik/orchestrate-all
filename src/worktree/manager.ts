@@ -200,6 +200,25 @@ export function createCheckWorktree(ctx: RepoContext, input: CheckWorktreeInput)
   return addWorktree(ctx, { runId, name, startSha: tip, branch: 'existing', lockReason: `orchestra run ${runId} ${name}` });
 }
 
+export interface ReopenInput {
+  readonly runId: string;
+  readonly taskId: string;
+  /** Where the task branch must point: its latest commit, as the run recorded it. */
+  readonly tip: string;
+}
+
+/**
+ * Checks the task's existing branch out again, at `tip`, in a fresh locked worktree at its usual folder (step 12):
+ * for each revision round, and after a crash, so nothing a worker or an acceptance command left in the old folder
+ * (a planted `.claude/settings.json`, say) is there for the next worker. The old folder must be gone (removed with
+ * removeTaskWorktree, keeping the branch). The returned handle's `startSha` is `tip`.
+ */
+export function reopenTaskWorktree(ctx: RepoContext, input: ReopenInput): Promise<CreateResult> {
+  const { runId, taskId, tip } = input;
+  if (!isValidTaskId(taskId)) return Promise.resolve(fail('bad-name', `"${taskId}" is not a valid task id.`));
+  return addWorktree(ctx, { runId, name: taskId, startSha: tip, branch: 'existing', lockReason: `orchestra run ${runId} task ${taskId}` });
+}
+
 /** Why the run's existing branch can't be checked out at `tip`, or null. */
 async function existingBranchProblem(ctx: RepoContext, ref: string, branch: string, tip: string): Promise<string | null> {
   const link = await repoGit(ctx, ['symbolic-ref', '--quiet', ref]);
@@ -423,7 +442,12 @@ export async function removeTaskWorktree(
     findAdminDir(ctx.commonDir, wt.path, ci) ??
     (recorded !== null && sameLocation(recorded, gitFile, ci) ? wt.adminDir : null);
   if (folderRemoved && adminDir !== null) {
-    await rm(adminDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    try {
+      await rm(adminDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch (error) {
+      // On Windows a git process may still hold a file there; git prunes the record later.
+      problems.push(`Could not remove git's record of the worktree (${adminDir}): ${errorText(error)}`);
+    }
   }
 
   let branchDeleted = false;
@@ -485,6 +509,37 @@ export async function removeLeftoverCheckWorktree(
     worktreeConfig: 'missing',
   };
   return removeTaskWorktree(ctx, handle);
+}
+
+/**
+ * Removes a task's worktree folder when its handle was lost (after a crash), found by its usual folder, and with
+ * `deleteBranchAt` also its branch, only while the branch still points there. Null when there is nothing to do.
+ */
+export async function removeLeftoverTaskWorktree(
+  ctx: RepoContext,
+  runId: string,
+  taskId: string,
+  opts: Pick<RemoveOptions, 'deleteBranchAt'> = {},
+): Promise<RemoveResult | null> {
+  if (!isValidRunId(runId) || !isValidTaskId(taskId)) {
+    return { ok: false, folderRemoved: false, branchDeleted: false, problems: ['The run or task id is not valid.'] };
+  }
+  const home = canonicalPath(ctx.home) ?? ctx.home;
+  const path = join(homeLayout(home).worktrees, runId, taskId);
+  if (!pathExists(path) && opts.deleteBranchAt === undefined) return null;
+  const branch = taskBranch(runId, taskId);
+  const handle: TaskWorktree = {
+    runId,
+    taskId,
+    path,
+    branch,
+    ref: branchRef(branch),
+    startSha: '',
+    adminDir: findAdminDir(ctx.commonDir, path, ctx.caseInsensitivePaths) ?? join(ctx.commonDir, 'worktrees', taskId),
+    lockReason: '',
+    worktreeConfig: 'missing',
+  };
+  return removeTaskWorktree(ctx, handle, opts);
 }
 
 export interface WorktreeEntry {

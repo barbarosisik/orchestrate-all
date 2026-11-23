@@ -12,6 +12,7 @@ import {
   removeLeftoverCheckWorktree,
   parseWorktreeList,
   removeTaskWorktree,
+  reopenTaskWorktree,
   startCommitFor,
   type TaskWorktree,
 } from '../../src/worktree/manager.js';
@@ -495,5 +496,54 @@ describe('startCommitFor', () => {
 
   it('refuses a dependent task before anything is merged', () => {
     expect(() => startCommitFor({ id: 'b', dependsOn: ['a'] }, 'base')).toThrow(/merge those first/);
+  });
+});
+
+describe('reopenTaskWorktree', () => {
+  async function committed(fx: Fixture): Promise<{ wt: TaskWorktree; commit: string }> {
+    const wt = await create(fx);
+    writeFileSync(join(wt.path, 'api.txt'), 'work\n');
+    await worktreeGit(fx.ctx, wt, ['add', 'api.txt']);
+    const made = await worktreeGit(fx.ctx, wt, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'work']);
+    if (made.code !== 0) throw new Error(made.stderr);
+    const tip = await worktreeGit(fx.ctx, wt, ['rev-parse', 'HEAD']);
+    return { wt, commit: tip.stdout.trim() };
+  }
+
+  it("checks the task's own branch out again, at its tip, in a fresh locked folder with nothing left over", async () => {
+    const fx = f.make();
+    const { wt, commit } = await committed(fx);
+    writeFileSync(join(wt.path, 'leftover.txt'), 'planted\n');
+    const removed = await removeTaskWorktree(fx.ctx, wt);
+    expect(removed.ok).toBe(true);
+    const reopened = await reopenTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', tip: commit });
+    if (!reopened.ok) throw new Error(reopened.error.message);
+    const again = reopened.worktree;
+    expect(again.path).toBe(wt.path);
+    expect(again.branch).toBe(wt.branch);
+    expect(again.startSha).toBe(commit);
+    expect(readFileSync(join(again.path, 'api.txt'), 'utf8')).toBe('work\n');
+    expect(existsSync(join(again.path, 'leftover.txt'))).toBe(false);
+    const listed = await listWorktrees(fx.ctx);
+    const own = listed.ok ? listed.worktrees.find((e) => canonicalPath(e.path) === again.path) : undefined;
+    expect(own?.locked).not.toBeNull();
+    expect(own?.branch).toBe(wt.ref);
+    const integrity = await checkIntegrity(fx.ctx, again, await takeBaseline(fx.ctx, { globalGitFiles: [] }), commit, { globalGitFiles: [] });
+    expect(integrity.violations).toEqual([]);
+  });
+
+  it('refuses a branch that moved, a missing branch, a folder in the way and bad names', async () => {
+    const fx = f.make();
+    const { wt, commit } = await committed(fx);
+    expect((await reopenTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', tip: commit })).ok).toBe(false);
+    await removeTaskWorktree(fx.ctx, wt);
+    const moved = await reopenTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'api', tip: fx.base });
+    expect(moved.ok ? 'ok' : moved.error.code).toBe('bad-branch');
+    const missing = await reopenTaskWorktree(fx.ctx, { runId: 'run1', taskId: 'web', tip: fx.base });
+    expect(missing.ok ? 'ok' : missing.error.code).toBe('bad-branch');
+    for (const taskId of ['integration', 'finalize', 'API', '../x']) {
+      const bad = await reopenTaskWorktree(fx.ctx, { runId: 'run1', taskId, tip: commit });
+      expect(bad.ok ? 'ok' : bad.error.code).toBe('bad-name');
+    }
   });
 });
