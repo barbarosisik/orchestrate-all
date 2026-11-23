@@ -31,6 +31,10 @@ export interface FakeReply {
    * `detached`, on its own (its own session on Linux and macOS), keeping the engine's stdout open with `holdsOutput`.
    */
   readonly leaveChild?: { readonly marker: string; readonly afterMs: number; readonly detached?: boolean; readonly holdsOutput?: boolean };
+  /** Files written (or, for null, deleted) before replying, relative to the folder it runs in: a worker's edits. */
+  readonly writeFiles?: Readonly<Record<string, string | null>>;
+  /** Files written by absolute path before replying: a worker stepping outside its worktree. */
+  readonly writeAbsolute?: Readonly<Record<string, string>>;
 }
 
 export interface FakeScenario {
@@ -38,6 +42,8 @@ export interface FakeScenario {
   readonly replies?: Readonly<Record<string, FakeReply>>;
   /** The reply to anything else (a worker run). */
   readonly run?: FakeReply;
+  /** Replies to worker runs by their brief: the first entry whose every string is in the brief wins, before `run`. */
+  readonly byBrief?: readonly { readonly includes: readonly string[]; readonly reply: FakeReply }[];
 }
 
 export interface FakeCall {
@@ -68,13 +74,27 @@ const fs = require('fs');
 const cp = require('child_process');
 const scenario = JSON.parse(fs.readFileSync(${JSON.stringify(scenarioFile)}, 'utf8'));
 const argv = process.argv.slice(2);
-const reply = (scenario.replies && Object.prototype.hasOwnProperty.call(scenario.replies, argv.join(' ')))
-  ? scenario.replies[argv.join(' ')] : (scenario.run || {});
 const chunks = [];
 let done = false;
+function pick(stdin) {
+  if (scenario.replies && Object.prototype.hasOwnProperty.call(scenario.replies, argv.join(' '))) return scenario.replies[argv.join(' ')];
+  for (const entry of scenario.byBrief || []) if (entry.includes.every((s) => stdin.includes(s))) return entry.reply;
+  return scenario.run || {};
+}
 function go() {
   if (done) return;
   done = true;
+  const reply = pick(Buffer.concat(chunks).toString('utf8'));
+  const path = require('path');
+  for (const [rel, content] of Object.entries(reply.writeFiles || {})) {
+    const full = path.join(process.cwd(), rel);
+    if (content === null) fs.rmSync(full, { force: true });
+    else { fs.mkdirSync(path.dirname(full), { recursive: true }); fs.writeFileSync(full, content); }
+  }
+  for (const [full, content] of Object.entries(reply.writeAbsolute || {})) {
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.appendFileSync(full, content);
+  }
   const at = argv.indexOf('--settings');
   const settings = at >= 0 ? argv[at + 1] : null;
   fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ argv, stdin: Buffer.concat(chunks).toString('utf8'), cwd: process.cwd(), env: process.env, settings, pid: process.pid }) + '\\n');
