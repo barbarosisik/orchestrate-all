@@ -12,8 +12,10 @@
  * 3. The brief (step 11's renderBrief) is saved to the run folder first; if it can't be, the worker doesn't start.
  *    Its raw output goes to the run folder as it comes (store.openOutput, capped), and its stdout is read as
  *    JSON events by the engine's adapter (a line too long to read is skipped and counted).
- * 4. The store records the worker run before the start (endedAt null, so a crash shows it never finished) and
- *    again at the end, with exit code, error and tokens; the log gets "started" and "finished".
+ * 4. The store records the worker run before the start (endedAt null, so a crash shows it never finished), its
+ *    process (id and start time, os/process-identity.ts) once it started, so a worker that outlived a crashed
+ *    conductor can be found and stopped (step 12), and again at the end, with exit code, error and tokens; the log
+ *    gets "started" and "finished".
  * 5. At the time limit, or when `signal` aborts, the whole process tree is stopped (os/process-tree.ts: its
  *    process group on Linux and macOS, a Job Object on Windows, without which it is not run). Processes the
  *    engine leaves running when it exits are stopped too. Once the engine has exited, a later time limit or
@@ -31,6 +33,7 @@ import { join } from 'node:path';
 import type { Launch } from '../accept/resolve.js';
 import { DEFAULT_LIMITS } from '../config/defaults.js';
 import { homeLayout } from '../config/home.js';
+import { identifyProcess } from '../os/process-identity.js';
 import { OWN_PROCESS_GROUP, prepareTree, timerDelay } from '../os/process-tree.js';
 import type { EngineName } from '../plan/schema.js';
 import { canonicalPath, samePath } from '../repo/canonical.js';
@@ -160,6 +163,7 @@ function runProcess(
   signal: AbortSignal | undefined,
   onStdout: (chunk: Buffer) => void,
   onStderr: (chunk: Buffer) => void,
+  onStart: (pid: number) => void,
 ): Promise<ProcessEnd> {
   return new Promise((resolve) => {
     // A cancel that came while the run was being prepared: the listener below would never hear it.
@@ -240,8 +244,10 @@ function runProcess(
 
     // The engine may exit without reading all of stdin (EPIPE); that is not a problem of ours.
     child.stdin.on('error', () => {});
-    if (containError === null) child.stdin.end(stdin);
-    else {
+    if (containError === null) {
+      if (child.pid !== undefined) onStart(child.pid);
+      child.stdin.end(stdin);
+    } else {
       // Not taken in: it never gets the brief, and it goes now (it had no time to start anything).
       child.stdin.end();
       child.kill('SIGKILL');
@@ -398,6 +404,23 @@ async function supervise(
     (bytes) => parser.skipped(bytes),
   );
   const started = performance.now();
+  // Its process, recorded as soon as it runs (id and start time): after a crash it can be found, and told apart from
+  // a later process given the same id. Only this run's own entry is changed, whether or not it has ended yet.
+  let recording: Promise<void> = Promise.resolve();
+  const recordProcess = (pid: number): void => {
+    recording = (async () => {
+      const identity = await identifyProcess(pid);
+      const proc = { pid, start: identity?.start ?? null };
+      const saved = await store.update((state) => {
+        const workers = [...(taskState(state, taskId)?.workers ?? [])];
+        const index = workers.findLastIndex((w) => w.round === round && w.startedAt === startedAt);
+        if (index === -1) return state;
+        workers[index] = { ...(workers[index] as WorkerRun), process: proc };
+        return withTask(state, taskId, { workers });
+      });
+      if (!saved.ok) storeProblems.push(`The worker's process could not be recorded: ${saved.problem.message}`);
+    })();
+  };
   // The folder once more, right before the start: another worker may have swapped it for a link meanwhile.
   const lateProblem = await worktreeProblem(store, opts.worktree);
   const end: ProcessEnd = lateProblem !== null ? { ...NOT_SPAWNED, spawnError: lateProblem } : await runProcess(
@@ -414,7 +437,9 @@ async function supervise(
     (chunk) => {
       if (!err.value.isClosed) err.value.write(chunk);
     },
+    recordProcess,
   );
+  await recording;
   splitter.end();
   const durationMs = Math.round(performance.now() - started);
   const report = parser.report();
@@ -429,7 +454,7 @@ async function supervise(
     const workers = [...(taskState(state, taskId)?.workers ?? [])];
     const index = workers.findLastIndex((w) => w.round === round && w.startedAt === startedAt && w.endedAt === null);
     if (index === -1) workers.push(finished);
-    else workers[index] = finished;
+    else workers[index] = { ...finished, ...(workers[index]?.process != null ? { process: workers[index]?.process } : {}) };
     return withTask(state, taskId, { workers });
   });
   if (!updated.ok) storeProblems.push(`The end of the worker run could not be recorded: ${updated.problem.message}`);

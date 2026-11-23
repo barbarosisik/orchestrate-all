@@ -47,6 +47,7 @@ export interface FakeCall {
   readonly env: Record<string, string>;
   /** The value after `--settings`, if any. */
   readonly settings: string | null;
+  readonly pid: number;
 }
 
 export interface FakeEngine {
@@ -76,7 +77,7 @@ function go() {
   done = true;
   const at = argv.indexOf('--settings');
   const settings = at >= 0 ? argv[at + 1] : null;
-  fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ argv, stdin: Buffer.concat(chunks).toString('utf8'), cwd: process.cwd(), env: process.env, settings }) + '\\n');
+  fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ argv, stdin: Buffer.concat(chunks).toString('utf8'), cwd: process.cwd(), env: process.env, settings, pid: process.pid }) + '\\n');
   if (reply.leaveChild) {
     const leave = reply.leaveChild;
     cp.spawn(process.execPath, ['-e', 'setTimeout(() => require("fs").writeFileSync(' + JSON.stringify(leave.marker) + ', "x"), ' + leave.afterMs + ')'],

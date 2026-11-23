@@ -82,6 +82,33 @@ async function outputText(s: Setup, taskId: string, round: number, stream: 'stdo
   return read.value === null ? null : read.value.data.toString('utf8');
 }
 
+describe('runWorker records the process', () => {
+  it("records the worker's process id and start time while it runs, so it can be found after a crash", async () => {
+    const s = await setup();
+    const fake = installFakeEngine(s.bin, 'claude', { run: { stdout: CLAUDE_OK, delayMs: 1_500 } });
+    let seen: unknown = null;
+    const running = runWorker(options(s, 'api'));
+    for (let i = 0; i < 100 && seen === null; i++) {
+      await delay(20);
+      seen = s.store.state.tasks.find((t) => t.id === 'api')?.workers[0]?.process ?? null;
+    }
+    const outcome = await running;
+    expect(outcome.status).toBe('completed');
+    const recorded = s.store.state.tasks.find((t) => t.id === 'api')?.workers[0]?.process;
+    expect(seen).toEqual(recorded);
+    expect(recorded?.pid).toBe(fake.calls()[0]?.pid);
+    expect(recorded?.start).not.toBeNull();
+    expect(s.store.state.tasks.find((t) => t.id === 'api')?.workers[0]?.endedAt).not.toBeNull();
+  });
+
+  it('records no process for a worker that never started', async () => {
+    const s = await setup();
+    const outcome = await runWorker(options(s, 'api'));
+    expect(outcome.status).toBe('not-started');
+    expect(s.store.state.tasks.find((t) => t.id === 'api')?.workers).toEqual([]);
+  });
+});
+
 describe('runWorker with Claude Code', () => {
   it('runs the worker locked down, saves its output and records the run in the store', async () => {
     const s = await setup();
@@ -119,6 +146,7 @@ describe('runWorker with Claude Code', () => {
         exitCode: 0,
         error: null,
         tokens: { input: 100, output: 20, cacheRead: 5, cacheWrite: 1, reasoning: null, costUsd: 0.5 },
+        process: { pid: call?.pid, start: task?.workers[0]?.process?.start ?? null },
       },
     ]);
 
