@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseOwnsEntry, type OwnsEntry } from '../../src/plan/paths.js';
-import { compilePatterns } from '../../src/plan/reserved.js';
+import { compilePatterns, literalPattern } from '../../src/plan/reserved.js';
 import { DEFAULT_RESERVED_PATTERNS, FORBIDDEN_PATTERNS } from '../../src/config/defaults.js';
 
 function entry(raw: string): OwnsEntry {
@@ -98,6 +98,72 @@ describe('compilePatterns', () => {
   it('ignores empty patterns', () => {
     const m = compilePatterns(['', '  ']);
     expect(m.match(entry('a.ts'))).toBeNull();
+  });
+
+  it('a leading slash anchors a pattern at the root, as in .gitignore', () => {
+    const m = compilePatterns(['/notes.md']);
+    expect(m.match(entry('notes.md'))).toBe('/notes.md');
+    expect(m.match(entry('docs/notes.md'))).toBeNull();
+  });
+
+  it('reads a bracket around one character as that character, never as a wildcard', () => {
+    const m = compilePatterns(['/a[*]b[?][[].md']);
+    expect(m.match(raw('a*b?[.md'))).toBe('/a[*]b[?][[].md');
+    expect(m.match(raw('axbyz.md'))).toBeNull();
+    expect(m.match(raw('a*b?x.md'))).toBeNull();
+  });
+
+  it('keeps longer brackets literal, as before', () => {
+    const m = compilePatterns(['[ab].md']);
+    expect(m.match(raw('[ab].md'))).toBe('[ab].md');
+    expect(m.match(entry('a.md'))).toBeNull();
+  });
+});
+
+/** A file entry for any path git can hold, even one an owned-path entry can't name (wildcards, spaces). */
+function raw(path: string): OwnsEntry {
+  return { path, key: path.toLowerCase().normalize('NFC'), isFolder: false };
+}
+
+describe('literalPattern', () => {
+  it.each([
+    'notes.md',
+    'docs/rules/style.md',
+    'docs/a*b.md',
+    'docs/what?.md',
+    'docs/[draft].md',
+    'docs/**',
+    'docs/x.md ',
+    'docs/ lead.md',
+    'docs/tab\t',
+    'Docs/ÄÖ.md',
+  ])('matches exactly %j', (path) => {
+    const pattern = literalPattern(path);
+    expect(pattern).not.toBeNull();
+    const m = compilePatterns([pattern as string]);
+    expect(m.match(raw(path))).toBe(pattern);
+    expect(m.match(raw(`other/${path}`))).toBeNull();
+  });
+
+  it('matches what the file system would also call that file (letter case, composed letters)', () => {
+    const m = compilePatterns([literalPattern('Docs/Cafe\u0301.md') as string]);
+    expect(m.match(raw('docs/café.md'))).not.toBeNull();
+  });
+
+  it('never matches more than the one path', () => {
+    const m = compilePatterns([literalPattern('docs/a*b?.md') as string]);
+    expect(m.match(raw('docs/axbyz.md'))).toBeNull();
+    expect(m.match(raw('docs/axby.md'))).toBeNull();
+    expect(m.match(raw('docs/a*b?.md/inner'))).not.toBeNull();
+    expect(compilePatterns([literalPattern('docs/**') as string]).match(raw('docs/x.md'))).toBeNull();
+    expect(compilePatterns([literalPattern('docs/x.md ') as string]).match(raw('docs/x.md'))).toBeNull();
+  });
+
+  it('refuses what it cannot write as a pattern', () => {
+    expect(literalPattern('docs\\x.md')).toBeNull();
+    expect(literalPattern('')).toBeNull();
+    expect(literalPattern('docs/')).toBeNull();
+    expect(literalPattern('/abs.md')).toBeNull();
   });
 });
 
