@@ -12,6 +12,8 @@
  *       gate-<round>.json   the gate: each acceptance command with its output, integrity and scope results
  *       diff-<round>.patch  the diff of the task's commit, capped
  *       brief-<round>.md    the brief the worker was given (step 11), saved before it starts
+ *       result-<round>.json the worker's own result, parsed, and how its list of changed files compares with the
+ *                           round's real diff (step 12), kept for the briefs of the tasks that depend on it
  *
  * `<round>` is the review round (0 for the first attempt, then one per revision). Every name comes from a
  * validated run id, task id or round number, so none can contain "..", a separator, upper case or a name
@@ -34,7 +36,7 @@ export const MAX_ROUND = 99;
 
 export const OUTPUT_STREAMS = ['stdout', 'stderr'] as const;
 export type OutputStream = (typeof OUTPUT_STREAMS)[number];
-export type RoundFile = OutputStream | 'gate' | 'diff' | 'brief';
+export type RoundFile = OutputStream | 'gate' | 'diff' | 'brief' | 'result';
 
 /** Checked at run time too: names may come from outside (the front doors, step 14). */
 export function isOutputStream(value: unknown): value is OutputStream {
@@ -47,6 +49,7 @@ const ROUND_FILE: Record<RoundFile, (round: number) => string> = {
   gate: (round) => `gate-${round}.json`,
   diff: (round) => `diff-${round}.patch`,
   brief: (round) => `brief-${round}.md`,
+  result: (round) => `result-${round}.json`,
 };
 
 export function isValidRound(round: number): boolean {

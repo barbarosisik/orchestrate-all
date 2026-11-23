@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import type { GateResult } from '../accept/gate.js';
 import { COMMAND_STATUSES } from '../accept/run.js';
+import { WorkerResultSchema } from '../brief/result.js';
 import { OWN_FINALIZE_PROBLEM_CODES, type FinalizeReport } from '../finalize/check.js';
 import { CHECKOUT_PROBLEM_CODES } from '../finalize/checkouts.js';
 import type { CombinedResult } from '../finalize/combined.js';
@@ -110,6 +111,15 @@ export const TokenUsageSchema = z
 
 export type TokenUsage = z.infer<typeof TokenUsageSchema>;
 
+/**
+ * The worker's process, recorded once it started (step 12): its id and the system's note of when it started
+ * (os/process-identity.ts), so that after a crash of the conductor a worker that outlived it can be found and
+ * stopped, and a reused id is never taken for it. `start` is null when it could not be read.
+ */
+export const WorkerProcessSchema = z
+  .object({ pid: z.number().int().positive().max(2 ** 32 - 1), start: z.string().min(1).max(200).nullable() })
+  .strict();
+
 /** One worker run: one per review round, more if a worker was restarted. */
 export const WorkerRunSchema = z
   .object({
@@ -121,6 +131,7 @@ export const WorkerRunSchema = z
     exitCode: z.number().int().nullable(),
     error: z.string().nullable(),
     tokens: TokenUsageSchema.nullable(),
+    process: WorkerProcessSchema.nullable().optional(),
   })
   .strict();
 
@@ -310,6 +321,39 @@ export const FinalizeReportSchema = z
 export const FinalizeRecordSchema = z
   .object({ schemaVersion: Version, runId: RunIdSchema, savedAt: TimeSchema, report: FinalizeReportSchema })
   .strict();
+
+// ---------------------------------------------------------------------------------------------------------
+// result-<round>.json: the worker's own result for one round (brief/result.ts), kept for dependents' briefs.
+
+/** How a worker's files_changed compares with the conductor's own diff of its round. */
+export const ClaimsSchema = z
+  .object({
+    /** Files the round changed that the worker did not list. */
+    unclaimed: z.array(z.string().max(4096)).max(10_000),
+    /** Files the worker listed that the round did not change. */
+    notChanged: z.array(z.string().max(4096)).max(10_000),
+  })
+  .strict();
+
+export type Claims = z.infer<typeof ClaimsSchema>;
+
+export const ResultRecordSchema = z
+  .object({
+    schemaVersion: Version,
+    runId: RunIdSchema,
+    taskId: TaskIdSchema,
+    round: RoundSchema,
+    savedAt: TimeSchema,
+    /** The worker's result as parsed, or null when there was none to read. It is the worker's account only. */
+    result: WorkerResultSchema.nullable(),
+    /** Why there is no result, or null. */
+    problem: z.string().max(4_000).nullable(),
+    /** Null when there was no diff to compare with (nothing committed in this round). */
+    claims: ClaimsSchema.nullable(),
+  })
+  .strict();
+
+export type StoredResult = Pick<z.infer<typeof ResultRecordSchema>, 'result' | 'problem' | 'claims'>;
 
 // ---------------------------------------------------------------------------------------------------------
 // log.jsonl: one record per line. Records are summaries; full results live in the files above.

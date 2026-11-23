@@ -72,6 +72,7 @@ import {
   FinalizeRecordSchema,
   GateRecordSchema,
   PlanRecordSchema,
+  ResultRecordSchema,
   RunStateSchema,
   STORE_SCHEMA_VERSION,
   type LogEntry,
@@ -79,6 +80,7 @@ import {
   type RunState,
   type StoredFinalizeReport,
   type StoredGate,
+  type StoredResult,
 } from './schema.js';
 import { newPlanRecord, newRunState, withTask, type NewRunInput, type TaskChange } from './state.js';
 import { CappedOutput, DEFAULT_MAX_OUTPUT_BYTES, readCappedOutput, type StoredOutput } from './stream.js';
@@ -87,7 +89,7 @@ export { type StoreProblem, type StoreProblemCode, type StoreResult } from './do
 
 const MIB = 1024 * 1024;
 /** Largest file of each kind the store writes or reads. */
-export const MAX_FILE_BYTES = { plan: 32 * MIB, state: 16 * MIB, finalize: 64 * MIB, gate: 32 * MIB } as const;
+export const MAX_FILE_BYTES = { plan: 32 * MIB, state: 16 * MIB, finalize: 64 * MIB, gate: 32 * MIB, result: 16 * MIB } as const;
 export type FileLimits = { readonly [K in keyof typeof MAX_FILE_BYTES]: number };
 export const DEFAULT_MAX_DIFF_BYTES = 4 * MIB;
 /** Briefs are rendered with every part bounded (brief/render.ts), so one stays under 2 MiB; this leaves room. */
@@ -518,6 +520,24 @@ export class RunStore {
   }
 
   /**
+   * Saves the worker's own result for one round (step 12): the parsed result or why there is none, and how its
+   * list of changed files compares with the round's real diff. Dependents' briefs quote it, as data.
+   */
+  saveResult(taskId: string, round: number, stored: StoredResult): Promise<StoreResult> {
+    return this.enqueue(async () => {
+      const bad = this.roundCheck<undefined>(taskId, round);
+      if (bad !== null) return bad;
+      if (stored.result !== null && stored.result.task_id !== taskId) {
+        return storeFail('invalid', `The worker result is for task "${stored.result.task_id}", not "${taskId}".`);
+      }
+      const folder = await this.taskFolderFor(taskId);
+      if (!folder.ok) return folder;
+      const value = { schemaVersion: STORE_SCHEMA_VERSION, runId: this.runId, taskId, round, savedAt: this.now().toISOString(), ...stored };
+      return writeDocument(roundFile(this.paths, taskId, 'result', round), value, ResultRecordSchema, limits(this.opts).result, atomicOptions(this.opts));
+    });
+  }
+
+  /**
    * Starts a capped file for a worker's output in one round (step 10 writes to it as the worker prints). A
    * file left by an earlier attempt at the same round is replaced.
    */
@@ -607,6 +627,26 @@ export function readGate(home: string, runId: string, taskId: string, round: num
       return storeFail('inconsistent', `${what} is the file of another run, task or round.`);
     }
     return { ok: true, value: parsed.value.gate };
+  });
+}
+
+/** A round's worker result, as saved (checked against its schema, run, task and round). */
+export function readResult(home: string, runId: string, taskId: string, round: number, opts: StoreOptions = {}): Promise<StoreResult<StoredResult | null>> {
+  return readOptional(home, runId, async (paths) => {
+    const bad = taskFileCheck<StoredResult>(runId, taskId, round);
+    if (bad !== null) return bad;
+    const folders = await taskFolders(paths, taskId);
+    if (folders !== null) return problem(folders);
+    const what = `The worker result of task "${taskId}", round ${round}, in run ${runId}`;
+    const read = await readFileCapped(roundFile(paths, taskId, 'result', round), limits(opts).result);
+    if (!read.ok) return read;
+    const parsed = parseDocument(read.value, ResultRecordSchema, what);
+    if (!parsed.ok) return parsed;
+    const record = parsed.value;
+    if (record.runId !== runId || record.taskId !== taskId || record.round !== round || (record.result !== null && record.result.task_id !== taskId)) {
+      return storeFail('inconsistent', `${what} is the file of another run, task or round.`);
+    }
+    return { ok: true, value: { result: record.result, problem: record.problem, claims: record.claims } };
   });
 }
 

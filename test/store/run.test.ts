@@ -30,6 +30,7 @@ import {
   readFinalizeReport,
   readGate,
   readOutput,
+  readResult,
   readRunLog,
   removeLeftovers,
   removeRun,
@@ -799,3 +800,74 @@ describe('saveBrief', () => {
     expect(code(await readBrief(home, RUN, 'api', 3, { maxBriefBytes: 10 }))).toBe('too-large');
   });
 });
+
+describe('saveResult', () => {
+  const RESULT = {
+    task_id: 'api',
+    status: 'completed' as const,
+    summary: 'Added the endpoint.',
+    files_changed: [{ path: 'src/api/a.ts', change: 'added' as const, purpose: 'the endpoint' }],
+    interfaces: [],
+    decisions: [],
+    assumptions: [],
+    verification: [],
+    deviations_from_brief: [],
+    reserved_change_requests: [],
+    open_questions: [],
+    blockers: [],
+    follow_ups: [],
+    suspicious_content: [],
+  };
+
+  it("keeps each round's worker result with how its claims compare with the real diff, and reads it back", async () => {
+    const home = tempHome();
+    const store = await create(home);
+    const claims = { unclaimed: ['src/api/b.ts'], notChanged: [] };
+    expect(code(await store.saveResult('api', 0, { result: RESULT, problem: null, claims }))).toBe('ok');
+    expect(code(await store.saveResult('api', 1, { result: null, problem: 'The worker ended without a final message.', claims: null }))).toBe('ok');
+    expect(await readResult(home, RUN, 'api', 0)).toEqual({ ok: true, value: { result: RESULT, problem: null, claims } });
+    const second = await readResult(home, RUN, 'api', 1);
+    expect(second.ok && second.value?.problem).toContain('without a final message');
+    expect(await readResult(home, RUN, 'api', 2)).toEqual({ ok: true, value: null });
+    expect(await readResult(home, RUN, 'ui', 0)).toEqual({ ok: true, value: null });
+  });
+
+  it("refuses another task's result, odd names and files that were edited", async () => {
+    const home = tempHome();
+    const store = await create(home);
+    expect(code(await store.saveResult('api', 0, { result: { ...RESULT, task_id: 'ui' }, problem: null, claims: null }))).toBe('invalid');
+    expect(code(await store.saveResult('api', -1, { result: null, problem: 'x', claims: null }))).toBe('bad-name');
+    expect(code(await store.saveResult('nope', 0, { result: null, problem: 'x', claims: null }))).toBe('bad-name');
+    expect(code(await readResult(home, RUN, '../x', 0))).toBe('bad-name');
+    await store.saveResult('api', 0, { result: RESULT, problem: null, claims: null });
+    const file = join(runFolder(home), 'tasks', 'api', 'result-0.json');
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { result: { task_id: string } };
+    saved.result.task_id = 'ui';
+    writeFileSync(file, JSON.stringify(saved));
+    expect(code(await readResult(home, RUN, 'api', 0))).toBe('inconsistent');
+    copyFileSafe(file, join(runFolder(home), 'tasks', 'api', 'result-1.json'));
+    expect(code(await readResult(home, RUN, 'api', 1))).toBe('inconsistent');
+    writeFileSync(file, '{');
+    expect(code(await readResult(home, RUN, 'api', 0))).toBe('corrupt');
+  });
+});
+
+describe('worker runs record their process', () => {
+  it('keeps the process id and start time, and refuses ids that name no single process', async () => {
+    const home = tempHome();
+    const store = await create(home);
+    const run = { round: 0, engine: 'claude' as const, model: 'test-model', startedAt: NOW.toISOString(), endedAt: null, exitCode: null, error: null, tokens: null };
+    const withProcess = { ...run, process: { pid: 4242, start: 'Sun Nov 22 12:23:45 2026' } };
+    expect(code(await store.updateTask('api', { status: 'working', startSha: BASE, workers: [withProcess] }))).toBe('ok');
+    const loaded = await loadRun(home, RUN);
+    expect(loaded.ok && loaded.value.state.tasks[0]?.workers[0]?.process).toEqual(withProcess.process);
+    for (const pid of [0, -1, 1.5]) {
+      expect(code(await store.updateTask('api', { workers: [{ ...run, process: { pid, start: null } }] }))).toBe('invalid');
+    }
+    expect(code(await store.updateTask('api', { workers: [run] }))).toBe('ok');
+  });
+});
+
+function copyFileSafe(from: string, to: string): void {
+  writeFileSync(to, readFileSync(from));
+}

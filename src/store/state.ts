@@ -103,6 +103,23 @@ export function contextOf(record: PlanRecord, home: string): RepoContext {
   return repoContext(readyPlanOf(record), { home, hooks: record.hooks, caseInsensitivePaths: record.caseInsensitivePaths });
 }
 
+/**
+ * A review state as the task's state holds it. The shapes are the same (schema.ts checks both ways at compile time);
+ * only the arrays' readonly marks differ, so this copies rather than casts.
+ */
+export function storedReview(review: TaskReview): NonNullable<TaskState['review']> {
+  return {
+    ...review,
+    criteria: [...review.criteria],
+    threshold: { ...review.threshold, blockingSeverities: [...review.threshold.blockingSeverities] },
+    attempts: review.attempts.map((a) => ({
+      round: a.round,
+      gate: a.gate === null ? null : { passed: a.gate.passed, summary: a.gate.summary },
+      review: a.review === null ? null : structuredClone(a.review),
+    })),
+  };
+}
+
 /** A task's review state, or null when its review hasn't started. */
 export function taskReviewOf(state: RunState, taskId: string): TaskReview | null {
   return taskState(state, taskId)?.review ?? null;
